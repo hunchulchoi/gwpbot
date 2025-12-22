@@ -378,7 +378,7 @@ def extract_legal_references_from_text(text: str) -> list[dict]:
   # 법령명과 조항을 함께 찾기
   for law_pattern in law_name_patterns:
     # 법령명 다음에 조항이 오는 패턴 찾기
-    pattern = f"({law_pattern})\s*({article_pattern})"
+    pattern = rf"({law_pattern})\s*({article_pattern})"
     matches = re.finditer(pattern, text)
     for match in matches:
       law_name = match.group(1)
