@@ -1,0 +1,69 @@
+[
+  { "match": "01 맞춤형 복지점수 운영", "pages": "미상", "priority": -10 },
+  { "match": "02 맞춤형 복지점수 배정 방법", "pages": "미상", "priority": -10 },
+  { "match": "03. 배정 후 처리사항", "pages": "미상", "priority": -10 },
+
+  { "match": "1. 맞춤형 복지 업무 연간 일정", "pages": "8p", "priority": 0 },
+  { "match": "2. 맞춤형 복지점수 배정 업무 처리기준", "pages": "9p", "priority": 0 },
+
+  { "match": "1. 배정 전 준비사항", "pages": "12p", "priority": 0 },
+  { "match": "1) 기관정보 설정", "pages": "12p", "priority": 0 },
+  { "match": "2) 자율항목 설정", "pages": "14p", "priority": 0 },
+  { "match": "3) 조직도 정비", "pages": "15p", "priority": 0 },
+
+  { "match": "2. 연계데이터 전송", "pages": "16p", "priority": 0 },
+  { "match": "1) E-사람 (중앙행정기관)", "pages": "16p", "priority": 0 },
+  { "match": "2) 人-사랑 (지방자치단체)", "pages": "17p", "priority": 0 },
+  { "match": "3) NEIS (교육청)", "pages": "18p", "priority": 0 },
+  { "match": "4) KORUS (국립대학교)", "pages": "19p", "priority": 0 },
+
+  { "match": "3. 배정 준비 FAQ (자주 묻는 질문)", "pages": "21p", "priority": 0 },
+
+  { "match": "배정 1단계 (기준정보 등록)", "pages": "28p", "priority": 0 },
+  { "match": "1. 배정 기준정보 등록", "pages": "28p", "priority": 0 },
+  { "match": "2. 배정 기준정보 확인", "pages": "39p", "priority": 0 },
+  { "match": "3. 배정 1단계 FAQ", "pages": "41p", "priority": 0 },
+
+  { "match": "배정 2단계 (배정인원 등록)", "pages": "48p", "priority": 0 },
+  { "match": "1) 정부인사시스템 연계 (A)", "pages": "49p", "priority": 0 },
+  { "match": "2) 엑셀파일 업로드 (B)", "pages": "50p", "priority": 0 },
+  { "match": "3) 작년정보 복사 (C)", "pages": "53p", "priority": 0 },
+  { "match": "4) 배정 인원 확인 및 확정 (A+B+C)", "pages": "54p", "priority": 0 },
+  { "match": "3. 배정 2단계 FAQ", "pages": "59p", "priority": 0 },
+
+  { "match": "배정 3단계 (배정기준별 인원 분류)", "pages": "66p", "priority": 0 },
+  { "match": "3. 배정 3단계 FAQ", "pages": "71p", "priority": 0 },
+
+  { "match": "배정 4단계 (자녀정보 등록)", "pages": "74p", "priority": 0 },
+  { "match": "1) 정부인사시스템 연계 (A)", "pages": "75p", "priority": 1 },
+  { "match": "2) 엑셀파일 업로드 (B)", "pages": "76p", "priority": 1 },
+  { "match": "3) 작년정보 복사 (C)", "pages": "78p", "priority": 1 },
+  { "match": "4) 자녀정보 확인 (A+B+C)", "pages": "79p", "priority": 1 },
+  { "match": "3. 배정 4단계 FAQ", "pages": "85p", "priority": 0 },
+
+  { "match": "배정 5단계 (배정비율 수정)", "pages": "88p", "priority": 0 },
+  { "match": "3. 배정 5단계 FAQ", "pages": "89p", "priority": 0 },
+
+  { "match": "배정 6단계 (보험차감)", "pages": "92p", "priority": 0 },
+  { "match": "3. 배정 6단계 FAQ", "pages": "97p", "priority": 0 },
+
+  { "match": "배정 7단계 (온누리상품권 차감)", "pages": "100p", "priority": 0 },
+  { "match": "1) 기준정보에 의한 차감", "pages": "100p", "priority": 1 },
+  { "match": "3) 엑셀파일 업로드", "pages": "102p", "priority": 1 },
+  { "match": "3. 배정 7단계 FAQ", "pages": "105p", "priority": 0 },
+
+  { "match": "배정 8단계 (배정확인/수정/추가)", "pages": "108p", "priority": 0 },
+  { "match": "3. 배정 8단계 FAQ", "pages": "115p", "priority": 0 },
+
+  { "match": "1. 휴직연장 처리 (인사변동 승인처리)", "pages": "120p", "priority": 0 },
+  { "match": "2. 복지점수 배정현황 확인 및 수정", "pages": "121p", "priority": 0 },
+  { "match": "1) 복지점수 배정현황 확인", "pages": "121p", "priority": 0 },
+  { "match": "2) 오배정자 삭제방법", "pages": "122p", "priority": 0 },
+  { "match": "3) 배정누락자 추가배정", "pages": "123p", "priority": 0 },
+  { "match": "4) 신규등록 (신규/전입)", "pages": "124p", "priority": 0 },
+  { "match": "3. 배정기초정보 수정", "pages": "125p", "priority": 0 },
+  { "match": "1) 근속점수, 가족점수 수정", "pages": "125p", "priority": 0 },
+  { "match": "2) 자녀점수 수정", "pages": "126p", "priority": 0 },
+  { "match": "3) 온누리상품권 의무구매점수 변경", "pages": "127p", "priority": 0 },
+  { "match": "4) 회계코드, 직종, 배정기준정보 변경", "pages": "128p", "priority": 0 }
+]

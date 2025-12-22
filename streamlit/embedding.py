@@ -1,6 +1,7 @@
 from enum import Enum
 import time
 import os
+import re
 
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 
@@ -16,6 +17,20 @@ from langchain_chroma import Chroma
 from dotenv import load_dotenv
 
 load_dotenv()
+
+_BR_TAG_RE = re.compile(r"<br\s*/?>", flags=re.IGNORECASE)
+_EXCESS_BLANKLINES_RE = re.compile(r"\n{3,}")
+_REFNUM_AFTER_WORD_RE = re.compile(r"([가-힣A-Za-z])(\d{1,6})(?=([)\].,!?;:\s]|$))")
+
+
+def _normalize_breaks(text: str) -> str:
+  if not text:
+    return text
+  text = _BR_TAG_RE.sub("\n", text)
+  text = _EXCESS_BLANKLINES_RE.sub("\n\n", text)
+  text = _REFNUM_AFTER_WORD_RE.sub(r"\1 \2", text)
+  return text.strip()
+
 
 def load_markdown_file(file_path:str="./data/2025공무원보수업무지침-맞품형복지.md"):
   # 문서 읽기
@@ -35,6 +50,8 @@ def load_markdown_file(file_path:str="./data/2025공무원보수업무지침-맞
       headers_to_split_on=headers_to_split_on,
   )
   document_list = loader.load_and_split(text_splitter)
+  for d in document_list:
+    d.page_content = _normalize_breaks(d.page_content)
 
   return document_list
 
