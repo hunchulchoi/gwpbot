@@ -109,8 +109,8 @@ def get_llm(llm_model:LLMModel=LLMModel.GPT_OSS_20B):
 
     return gemini_llm
   elif llm_model == LLMModel.GPT_5_MINI:
-    # timeout 300
-    gpt_mini_llm = ChatOpenAI(model="gpt-5-mini", timeout=100)
+    # timeout 300, max_tokens 제한으로 성능 최적화 (temperature는 응답 다양성만 조절, 속도와는 무관)
+    gpt_mini_llm = ChatOpenAI(model="gpt-5-mini", timeout=100, max_tokens=800)
 
     return gpt_mini_llm
   elif llm_model == LLMModel.GPT_5_NANO:
@@ -143,7 +143,7 @@ def get_retriever_chroma():
     persist_directory=persist_directory,
     embedding_function=embedding,
   )
-  retriever = database.as_retriever(search_kwargs={"k": 5})
+  retriever = database.as_retriever(search_kwargs={"k": 3})
   #retriever = database.as_retriever()
 
   logger.info(f'Retriever initialized for collection: {collection_name}')
@@ -156,7 +156,7 @@ def get_retriever_pinecone():
   logger.info(f'get_retriever with embedding model: {embedding.model}')
 
   pinecone_db = PineconeVectorStore(index_name="gwp", embedding=embedding)
-  retriever = pinecone_db.as_retriever(search_kwargs={"k": 5})
+  retriever = pinecone_db.as_retriever(search_kwargs={"k": 3})
   return retriever
 
 
@@ -461,22 +461,17 @@ def get_fewshot_examples_text():
 
 
 def get_dictionary_chain():
-  """사전 기반 질문 변경 체인 (맞복 -> 맞춤형복지)."""
+  """사전 기반 질문 변경 체인 (맞복 -> 맞춤형복지). 단순 문자열 치환으로 최적화."""
 
   logger.info('get_dictionary_chain started')
 
-  dictionary = ["맞복 -> 맞춤형복지"]
-  prompt = ChatPromptTemplate.from_template(f"""
-    사용자의 질문을 보고, 우리의 사전을 참고해서 사용자의 질문을 변경해주세요.
-    만약 변경할 필요가 없다고 판단된다면, 사용자의 질문을 변경하지 않아도 됩니다.
-    그런 경우에는 질문만 리턴해 주세요
-    사전:{dictionary}
-    
-    사용자의 질문:{{question}}
-    """
-  )
+  # LLM 호출 없이 단순 문자열 치환으로 변경하여 성능 향상
+  def normalize_question(question: str) -> str:
+    """질문 정규화: 맞복 -> 맞춤형복지"""
+    normalized = question.replace("맞복", "맞춤형복지")
+    return normalized
 
-  dictionary_chain = prompt | llm 
+  dictionary_chain = RunnableLambda(normalize_question)
 
   logger.info('get_dictionary_chain ended')
 
@@ -523,9 +518,10 @@ def get_rag_chain():
 
   # 1. History-Aware Question Transformation Prompt
   # 이전 대화와 현재 질문을 기반으로 독립적인 검색 쿼리를 생성하도록 LLM에 지시합니다.
+  # 프롬프트 간소화 및 temperature 조정으로 성능 최적화
   contextualize_q_system_prompt = (
-    "주어진 대화 이력과 최신 사용자 질문을 바탕으로, 검색 시스템에 전달할 독립적인 "
-    "검색 쿼리를 생성하세요. 대화 이력이 없다면, 단순히 최신 사용자 질문을 쿼리로 사용하세요."
+    "대화 이력과 최신 질문을 바탕으로 검색 쿼리를 생성하세요. "
+    "대화 이력이 없으면 현재 질문을 그대로 사용하세요."
   )
   contextualize_q_prompt = ChatPromptTemplate.from_messages(
     [
@@ -534,8 +530,9 @@ def get_rag_chain():
       ("user", "{question}"),
     ]
   )
-
+  
   # 질문 변환 체인: chat_history와 question을 받아 검색 쿼리(새로운 질문)를 생성
+  # 기존 llm 사용 (temperature는 LLM 생성 시 이미 설정됨)
   history_aware_retriever = contextualize_q_prompt | llm | StrOutputParser() | get_retriever_pinecone()
 
   # 2. Answer Generation Prompt (RAG Prompt with Few-shot examples)
