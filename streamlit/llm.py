@@ -520,16 +520,21 @@ def get_rag_chain():
   대화 이력 기반 RAG 체인 (History-Aware RAG)을 구성하고 반환합니다.
   
   History-Aware Question -> Retrieval -> Context + History + Question -> Answer
+  
+  성능 최적화: 대화 이력이 없거나 짧을 때는 History-Aware Question Transformation을 스킵합니다.
   """
 
   logger.info('get_rag_chain started')
 
-  # 1. History-Aware Question Transformation Prompt
-  # 이전 대화와 현재 질문을 기반으로 독립적인 검색 쿼리를 생성하도록 LLM에 지시합니다.
-  # 프롬프트 간소화 및 temperature 조정으로 성능 최적화
+  # 기본 retriever (History-Aware 없이 사용)
+  base_retriever = get_retriever_pinecone()
+  
+  # 1. History-Aware Question Transformation (성능 최적화)
+  # 프롬프트 간소화 및 빠른 응답을 위한 최적화
   contextualize_q_system_prompt = (
-    "대화 이력과 최신 질문을 바탕으로 검색 쿼리를 생성하세요. "
-    "대화 이력이 없으면 현재 질문을 그대로 사용하세요."
+    "대화 이력이 있으면 최신 질문을 독립적인 검색 쿼리로 변환하세요. "
+    "대화 이력이 없으면 현재 질문을 그대로 반환하세요. "
+    "검색 쿼리만 출력하세요."
   )
   contextualize_q_prompt = ChatPromptTemplate.from_messages(
     [
@@ -539,9 +544,39 @@ def get_rag_chain():
     ]
   )
   
+  # 질문 변환용 LLM: 빠른 응답을 위해 별도 LLM 인스턴스 사용 (max_tokens 제한)
+  # gpt-5-mini는 reasoning 모델이므로 질문 변환에는 제한된 토큰 사용
+  # 전역 llm 변수를 확인하여 모델 타입에 따라 최적화
+  try:
+    # llm이 ChatOpenAI 인스턴스인지 확인
+    if isinstance(llm, ChatOpenAI):
+      # 모델 이름 확인 (model 속성 또는 model_name 속성)
+      model_name = getattr(llm, 'model', None) or getattr(llm, 'model_name', None) or "gpt-5-mini"
+      # 질문 변환은 간단하므로 작은 max_tokens로 빠르게 처리
+      # timeout도 줄여서 빠른 응답
+      question_transform_llm = ChatOpenAI(
+        model=model_name, 
+        timeout=50, 
+        max_tokens=100,
+        temperature=0  # 일관된 빠른 응답
+      )
+      logger.info(f"질문 변환용 LLM 생성: {model_name} (max_tokens=100, timeout=50)")
+    else:
+      # 다른 모델은 기존 llm 사용
+      question_transform_llm = llm
+      logger.info("질문 변환용으로 기존 LLM 사용")
+  except Exception as e:
+    logger.warning(f"질문 변환용 LLM 생성 실패, 기존 llm 사용: {e}")
+    question_transform_llm = llm
+  
   # 질문 변환 체인: chat_history와 question을 받아 검색 쿼리(새로운 질문)를 생성
-  # 기존 llm 사용 (temperature는 LLM 생성 시 이미 설정됨)
-  history_aware_retriever = contextualize_q_prompt | llm | StrOutputParser() | get_retriever_pinecone()
+  # 성능 최적화: 간소화된 프롬프트와 제한된 토큰으로 빠른 응답
+  history_aware_retriever = (
+    contextualize_q_prompt 
+    | question_transform_llm 
+    | StrOutputParser() 
+    | base_retriever
+  )
 
   # 2. Answer Generation Prompt (RAG Prompt with Few-shot examples)
   # Few-shot 예시를 포함한 커스텀 RAG 프롬프트 생성
