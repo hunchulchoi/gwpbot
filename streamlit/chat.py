@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # 애플리케이션 로깅 설정
 setup_logging()
 
-llm_model: LLMModel = LLMModel.GPT_4o_MINI
+llm_model: LLMModel = LLMModel.GPT_5_NANO
 embedding_model: EmbeddingModel = EmbeddingModel.OPENAI
 
 
@@ -202,10 +202,10 @@ if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 
     qa_message = None
     
     # 스트리밍 응답 처리
-    last_chunk = None
+    all_chunks = []
     for chunk in stream_generator:
       chunk_text = ""
-      last_chunk = chunk  # 마지막 chunk 저장 (메타데이터 포함 가능)
+      all_chunks.append(chunk)  # 모든 chunk 저장 (메타데이터 확인용)
       
       # chunk에서 텍스트 추출
       if hasattr(chunk, 'content'):
@@ -220,27 +220,23 @@ if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 
         # 스트리밍 중 답변 표시 (커서 포함)
         answer_container.markdown(full_answer + "▌", unsafe_allow_html=True)
     
-    # 마지막 chunk에서 전체 메시지 추출 (메타데이터 포함)
-    if last_chunk and not hasattr(last_chunk, 'content') and not isinstance(last_chunk, str):
-      # 마지막 chunk가 전체 메시지인 경우
-      qa_message = last_chunk
-      if not full_answer:
-        # 스트리밍 중 답변이 없었지만 qa_message가 있는 경우
-        if hasattr(qa_message, 'content'):
-          full_answer = qa_message.content or ""
-        elif hasattr(qa_message, 'text'):
-          full_answer = qa_message.text or ""
-    else:
-      # 마지막 chunk가 텍스트인 경우, 전체 메시지를 얻기 위해 별도 처리 필요
-      # 스트리밍 완료 후 메타데이터를 얻기 위해 invoke()를 한 번 더 호출
-      # 하지만 이는 비효율적이므로, 스트리밍 중 수집한 정보로 처리
-      qa_message = last_chunk
-    
     # 스트리밍 완료 후 최종 답변 표시 (커서 제거)
     answer_container.markdown(full_answer, unsafe_allow_html=True)
     
-    # 토큰 정보 추출
+    # 토큰 정보 추출: 모든 chunk에서 메타데이터가 있는 chunk 찾기
     tokens_info = {}
+    qa_message = None
+    
+    # 역순으로 확인하여 메타데이터가 있는 마지막 chunk 찾기
+    for chunk in reversed(all_chunks):
+      if hasattr(chunk, 'response_metadata') or hasattr(chunk, 'usage_metadata'):
+        qa_message = chunk
+        break
+    
+    # 메타데이터가 있는 chunk가 없으면 마지막 chunk 사용
+    if not qa_message and all_chunks:
+      qa_message = all_chunks[-1]
+    
     if qa_message:
       # OpenAI 형식: response_metadata['token_usage']
       if hasattr(qa_message, 'response_metadata'):
@@ -252,6 +248,7 @@ if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 
             'completion_tokens': token_usage.get('completion_tokens', 0),
             'total_tokens': token_usage.get('total_tokens', 0)
           }
+          logger.info(f"스트리밍에서 토큰 정보 추출 성공 (OpenAI): {tokens_info}")
       
       # Google Gemini 형식: usage_metadata
       if not tokens_info and hasattr(qa_message, 'usage_metadata'):
@@ -261,9 +258,9 @@ if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 
           'completion_tokens': getattr(usage_metadata, 'output_tokens', 0),
           'total_tokens': getattr(usage_metadata, 'total_tokens', 0)
         }
+        logger.info(f"스트리밍에서 토큰 정보 추출 성공 (Gemini): {tokens_info}")
     
     # 스트리밍에서 메타데이터를 얻지 못한 경우, 별도로 invoke() 호출하여 메타데이터 수집
-    # 주의: 이는 성능에 영향을 줄 수 있으므로, 가능하면 스트리밍에서 메타데이터를 수집하는 것이 좋습니다
     if not tokens_info:
       try:
         logger.info("스트리밍에서 토큰 정보를 얻지 못해 별도로 메타데이터 수집 시도")
