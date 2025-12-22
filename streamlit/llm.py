@@ -109,8 +109,10 @@ def get_llm(llm_model:LLMModel=LLMModel.GPT_OSS_20B):
 
     return gemini_llm
   elif llm_model == LLMModel.GPT_5_MINI:
-    # timeout 300, max_tokens 제한으로 성능 최적화 (temperature는 응답 다양성만 조절, 속도와는 무관)
-    gpt_mini_llm = ChatOpenAI(model="gpt-5-mini", timeout=100, max_tokens=800)
+    # gpt-5-mini는 reasoning 모델이므로 reasoning 토큰 + completion 토큰을 모두 고려해야 함
+    # reasoning에 1500 토큰을 사용하면 실제 답변이 생성되지 않을 수 있으므로 충분히 크게 설정
+    # timeout 300, max_tokens를 충분히 크게 설정하여 reasoning 후 실제 답변도 생성되도록 함
+    gpt_mini_llm = ChatOpenAI(model="gpt-5-mini", timeout=100, max_tokens=4000)
 
     return gpt_mini_llm
   elif llm_model == LLMModel.GPT_5_NANO:
@@ -650,6 +652,12 @@ def get_ai_message(user_message:str,
   # invoke로 실행하여 응답과 메타데이터를 한 번에 받음
   qa_message = rag_chain.invoke({"question": user_message}, config=config)
   
+  # 디버깅: qa_message 타입과 내용 확인
+  logger.info(f"qa_message type: {type(qa_message)}")
+  logger.info(f"qa_message has content attr: {hasattr(qa_message, 'content')}")
+  if hasattr(qa_message, 'content'):
+    logger.info(f"qa_message.content length: {len(qa_message.content) if qa_message.content else 0}")
+  
   # LLM 응답에서 토큰 정보 추출
   tokens_info = {}
   if hasattr(qa_message, 'response_metadata'):
@@ -672,8 +680,22 @@ def get_ai_message(user_message:str,
       'total_tokens': getattr(usage_metadata, 'total_tokens', 0)
     }
   
-  # 답변 내용 추출
-  full_answer = qa_message.content if hasattr(qa_message, 'content') else str(qa_message)
+  # 답변 내용 추출 (AIMessage 객체에서 content 추출)
+  try:
+    if hasattr(qa_message, 'content'):
+      full_answer = qa_message.content or ""
+    elif hasattr(qa_message, 'text'):
+      full_answer = qa_message.text or ""
+    else:
+      # 딕셔너리나 다른 형태일 수도 있음
+      full_answer = str(qa_message) if qa_message else ""
+    
+    logger.info(f"full_answer extracted, length: {len(full_answer)}")
+    if not full_answer:
+      logger.warning(f"full_answer is empty! qa_message: {qa_message}, type: {type(qa_message)}")
+  except Exception as e:
+    logger.error(f"Error extracting full_answer: {e}")
+    full_answer = str(qa_message) if qa_message else ""
   
   # context는 빈 리스트로 설정 (별도 추출 필요 시 추가 구현)
   context_docs = []
