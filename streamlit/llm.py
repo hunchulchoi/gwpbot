@@ -86,7 +86,7 @@ def get_embedding_model(embedding_model:EmbeddingModel=EmbeddingModel.UPSTAGE):
 def get_llm(llm_model:LLMModel=LLMModel.GPT_OSS_20B):
   """LLM 인스턴스를 반환합니다."""
 
-  logger.info(f'llm_model: {llm_model}')
+  logger.debug(f'llm_model: {llm_model}')
   if llm_model == LLMModel.EXAONE4_0_32B:
     return OllamaLLM(model="ingu627/exaone4.0:32b")
   elif llm_model == LLMModel.GPT_OSS_20B:
@@ -109,7 +109,7 @@ def get_llm(llm_model:LLMModel=LLMModel.GPT_OSS_20B):
         transport="rest"
     )
 
-    logger.info(f'gemini_llm: {gemini_llm}')
+    logger.debug(f'gemini_llm: {gemini_llm}')
 
     return gemini_llm
   elif llm_model == LLMModel.GEMINI_3_PRO:
@@ -170,7 +170,7 @@ def get_session_history(session_id: str) -> InMemoryChatMessageHistory:
     # history.clear()
     # for msg in messages_to_keep:
     #   history.add_message(msg)
-    # logger.info(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
+    # logger.debug(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
     
     # 방법 2: 오래된 대화를 요약하여 기억 (더 많은 컨텍스트 유지)
     from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -210,7 +210,7 @@ def get_session_history(session_id: str) -> InMemoryChatMessageHistory:
         for msg in recent_messages:
           history.add_message(msg)
         
-        logger.info(f"대화 이력 요약: {len(messages)}개 -> 요약 1개 + 최신 {len(recent_messages)}개 메시지")
+        logger.debug(f"대화 이력 요약: {len(messages)}개 -> 요약 1개 + 최신 {len(recent_messages)}개 메시지")
       except Exception as e:
         logger.warning(f"대화 이력 요약 실패, 최근 메시지만 유지: {e}")
         # 요약 실패 시 최근 메시지만 유지
@@ -218,28 +218,28 @@ def get_session_history(session_id: str) -> InMemoryChatMessageHistory:
         history.clear()
         for msg in messages_to_keep:
           history.add_message(msg)
-        logger.info(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
+        logger.debug(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
     else:
       # LLM이 없거나 오래된 메시지가 없으면 최근 메시지만 유지
       messages_to_keep = messages[-MAX_MESSAGES:]
       history.clear()
       for msg in messages_to_keep:
         history.add_message(msg)
-      logger.info(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
+      logger.debug(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
   
   return history
 
 
 def get_retriever_chroma():
   """Chroma DB 기반의 Retriver를 반환합니다."""
-  logger.info(f'get_retriever with embedding model: {embedding.model}')
+  logger.debug(f'get_retriever with embedding model: {embedding.model}')
 
   collection_name = f"welfare_manual_{embedding.model.replace(':', '_')}"
   persist_directory = os.path.join(os.getcwd(), "chroma_db")
 
   #print('collection_name', collection_name)
 
-  logger.info(f"{persist_directory}/{collection_name}")
+  logger.debug(f"{persist_directory}/{collection_name}")
 
   database = Chroma(
     collection_name=collection_name,
@@ -249,14 +249,14 @@ def get_retriever_chroma():
   retriever = database.as_retriever(search_kwargs={"k": 3})
   #retriever = database.as_retriever()
 
-  logger.info(f'Retriever initialized for collection: {collection_name}')
+  logger.debug(f'Retriever initialized for collection: {collection_name}')
 
   return retriever
 
 
 def get_retriever_pinecone():
   """Pinecone DB 기반의 Retriver를 반환합니다."""
-  logger.info(f'get_retriever with embedding model: {embedding.model}')
+  logger.debug(f'get_retriever with embedding model: {embedding.model}')
 
   pinecone_db = PineconeVectorStore(index_name="gwp", embedding=embedding)
   retriever = pinecone_db.as_retriever(search_kwargs={"k": 5})
@@ -267,7 +267,7 @@ def save_log_to_supabase(session_id, question, answer, model, latency, tokens, s
   """
   로그를 Supabase에 저장합니다.
   """
-  logger.info(f'save_log_to_supabase started - tokens: {tokens}, retrieved_documents: {source_documents}')
+  logger.debug(f'save_log_to_supabase started - tokens: {tokens}, retrieved_documents: {source_documents}')
 
   # LLMModel enum인 경우 .value로 문자열 변환
   model_name = model.value if hasattr(model, 'value') else str(model)
@@ -342,7 +342,7 @@ def save_log_to_supabase(session_id, question, answer, model, latency, tokens, s
   def save_log_async():
     try:
       supabase.table("chat_logs").insert(data).execute()
-      logger.info(f"로그 저장 성공: session_id={session_id}")
+      logger.debug(f"로그 저장 성공: session_id={session_id}")
     except Exception as e:
       logger.error(f"로그 저장 실패: {e}")
   
@@ -566,7 +566,7 @@ def get_fewshot_examples_text():
 def get_dictionary_chain():
   """사전 기반 질문 변경 체인 (맞복 -> 맞춤형복지). 단순 문자열 치환으로 최적화."""
 
-  logger.info('get_dictionary_chain started')
+  logger.debug('get_dictionary_chain started')
 
   # LLM 호출 없이 단순 문자열 치환으로 변경하여 성능 향상
   def normalize_question(input_data) -> str:
@@ -582,14 +582,14 @@ def get_dictionary_chain():
 
   dictionary_chain = RunnableLambda(normalize_question)
 
-  logger.info('get_dictionary_chain ended')
+  logger.debug('get_dictionary_chain ended')
 
   return dictionary_chain
 
 
 def get_qa_chain():
 
-  logger.info('get_qa_chain started')
+  logger.debug('get_qa_chain started')
 
   #llm = get_llm()
   retriever = get_retriever_pinecone()
@@ -609,7 +609,7 @@ def get_qa_chain():
     #| StrOutputParser()
   )
 
-  logger.info('get_qa_chain ended')
+  logger.debug('get_qa_chain ended')
 
   return qa_chain
 
@@ -625,7 +625,7 @@ def get_rag_chain():
   성능 최적화: 대화 이력이 없거나 짧을 때는 History-Aware Question Transformation을 스킵합니다.
   """
 
-  logger.info('get_rag_chain started')
+  logger.debug('get_rag_chain started')
 
   # 기본 retriever (History-Aware 없이 사용)
   base_retriever = get_retriever_pinecone()
@@ -708,7 +708,7 @@ Answer:"""
     history_messages_key="chat_history",
   )
 
-  logger.info(f'RAG chain (History-Aware) configuration complete.')
+  logger.debug(f'RAG chain (History-Aware) configuration complete.')
 
   return final_rag_chain
 
@@ -768,7 +768,7 @@ def get_ai_message(user_message:str,
       def on_retriever_end(self, documents, **kwargs):
           # 검색된 문서들을 metadata에 저장
           self.metadata["context"] = documents
-          logger.info(f"Retrieved {len(documents)} documents via callback")
+          logger.debug(f"Retrieved {len(documents)} documents via callback")
 
   # 스트리밍 제너레이터와 빈 metadata 반환 (실제 metadata는 스트리밍 완료 후 수집)
   metadata = {
@@ -784,7 +784,7 @@ def get_ai_message(user_message:str,
   config["callbacks"] = [callback_handler]
 
   # RAG 체인 실행 (stream 사용)
-  logger.info(f"Streaming RAG chain with session_id: {session_id} and question: {user_message}")
+  logger.debug(f"Streaming RAG chain with session_id: {session_id} and question: {user_message}")
   
   # stream으로 실행하여 스트리밍 응답 반환
   stream_generator = rag_chain.stream({"question": user_message}, config=config)
