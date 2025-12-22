@@ -5,10 +5,14 @@ import uuid
 import logging
 import threading
 
-from dotenv import load_dotenv
-from langchain_core.chat_history import InMemoryChatMessageHistory
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv가 없으면 환경 변수만 사용 (Streamlit Cloud Secrets 사용)
+    pass
 
-load_dotenv()
+from langchain_core.chat_history import InMemoryChatMessageHistory
 
 from langchain_pinecone import PineconeVectorStore
 from langchain_chroma import Chroma

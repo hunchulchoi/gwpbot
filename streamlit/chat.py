@@ -7,9 +7,12 @@ import time
 import logging
 import re
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv가 없으면 환경 변수만 사용 (Streamlit Cloud Secrets 사용)
+    pass
 
 from llm import get_ai_message
 from llm import LLMModel
