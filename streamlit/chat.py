@@ -193,21 +193,127 @@ if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 
     st.write(user_question)
     st.session_state.messages.append({"role": "user", "content": user_question})
 
-  with st.spinner("답변을 준비중입니다..."):
-    qa_message, metadata = get_ai_message(user_question, llm_model, embedding_model, session_id)
-
+  with st.chat_message("assistant"):
+    stream_generator, metadata = get_ai_message(user_question, llm_model, embedding_model, session_id)
+    
+    # 스트리밍 응답 표시
+    answer_container = st.empty()
+    full_answer = ""
+    qa_message = None
+    
+    # 스트리밍 응답 처리
+    last_chunk = None
+    for chunk in stream_generator:
+      chunk_text = ""
+      last_chunk = chunk  # 마지막 chunk 저장 (메타데이터 포함 가능)
+      
+      # chunk에서 텍스트 추출
+      if hasattr(chunk, 'content'):
+        chunk_text = chunk.content if chunk.content else ""
+      elif isinstance(chunk, str):
+        chunk_text = chunk
+      elif hasattr(chunk, 'text'):
+        chunk_text = chunk.text if chunk.text else ""
+      
+      if chunk_text:
+        full_answer += chunk_text
+        # 스트리밍 중 답변 표시 (커서 포함)
+        answer_container.markdown(full_answer + "▌", unsafe_allow_html=True)
+    
+    # 마지막 chunk에서 전체 메시지 추출 (메타데이터 포함)
+    if last_chunk and not hasattr(last_chunk, 'content') and not isinstance(last_chunk, str):
+      # 마지막 chunk가 전체 메시지인 경우
+      qa_message = last_chunk
+      if not full_answer:
+        # 스트리밍 중 답변이 없었지만 qa_message가 있는 경우
+        if hasattr(qa_message, 'content'):
+          full_answer = qa_message.content or ""
+        elif hasattr(qa_message, 'text'):
+          full_answer = qa_message.text or ""
+    else:
+      # 마지막 chunk가 텍스트인 경우, 전체 메시지를 얻기 위해 별도 처리 필요
+      # 스트리밍 완료 후 메타데이터를 얻기 위해 invoke()를 한 번 더 호출
+      # 하지만 이는 비효율적이므로, 스트리밍 중 수집한 정보로 처리
+      qa_message = last_chunk
+    
+    # 스트리밍 완료 후 최종 답변 표시 (커서 제거)
+    answer_container.markdown(full_answer, unsafe_allow_html=True)
+    
+    # 토큰 정보 추출
+    tokens_info = {}
+    if qa_message:
+      # OpenAI 형식: response_metadata['token_usage']
+      if hasattr(qa_message, 'response_metadata'):
+        response_metadata = qa_message.response_metadata
+        if 'token_usage' in response_metadata:
+          token_usage = response_metadata['token_usage']
+          tokens_info = {
+            'prompt_tokens': token_usage.get('prompt_tokens', 0),
+            'completion_tokens': token_usage.get('completion_tokens', 0),
+            'total_tokens': token_usage.get('total_tokens', 0)
+          }
+      
+      # Google Gemini 형식: usage_metadata
+      if not tokens_info and hasattr(qa_message, 'usage_metadata'):
+        usage_metadata = qa_message.usage_metadata
+        tokens_info = {
+          'prompt_tokens': getattr(usage_metadata, 'input_tokens', 0),
+          'completion_tokens': getattr(usage_metadata, 'output_tokens', 0),
+          'total_tokens': getattr(usage_metadata, 'total_tokens', 0)
+        }
+    
+    # 스트리밍에서 메타데이터를 얻지 못한 경우, 별도로 invoke() 호출하여 메타데이터 수집
+    # 주의: 이는 성능에 영향을 줄 수 있으므로, 가능하면 스트리밍에서 메타데이터를 수집하는 것이 좋습니다
+    if not tokens_info:
+      try:
+        logger.info("스트리밍에서 토큰 정보를 얻지 못해 별도로 메타데이터 수집 시도")
+        from llm import get_llm, get_rag_chain, get_dictionary_chain
+        from langchain_core.runnables import RunnableLambda
+        
+        # 체인 재구성 (메타데이터 수집용) - 이미 초기화된 전역 변수 사용
+        dictionary_chain = get_dictionary_chain()
+        history_aware_rag_chain = get_rag_chain()
+        question_formatter = RunnableLambda(lambda x: {"question": x})
+        rag_chain = dictionary_chain | question_formatter | history_aware_rag_chain
+        config = {"configurable": {"session_id": session_id}}
+        
+        # invoke()로 메타데이터 수집 (답변은 이미 있으므로 빠르게 처리)
+        # 주의: 이는 LLM을 한 번 더 호출하므로 성능에 영향을 줄 수 있습니다
+        qa_message_for_metadata = rag_chain.invoke({"question": user_question}, config=config)
+        
+        # 토큰 정보 추출
+        if hasattr(qa_message_for_metadata, 'response_metadata'):
+          response_metadata = qa_message_for_metadata.response_metadata
+          if 'token_usage' in response_metadata:
+            token_usage = response_metadata['token_usage']
+            tokens_info = {
+              'prompt_tokens': token_usage.get('prompt_tokens', 0),
+              'completion_tokens': token_usage.get('completion_tokens', 0),
+              'total_tokens': token_usage.get('total_tokens', 0)
+            }
+            logger.info(f"토큰 정보 수집 성공: {tokens_info}")
+        
+        if not tokens_info and hasattr(qa_message_for_metadata, 'usage_metadata'):
+          usage_metadata = qa_message_for_metadata.usage_metadata
+          tokens_info = {
+            'prompt_tokens': getattr(usage_metadata, 'input_tokens', 0),
+            'completion_tokens': getattr(usage_metadata, 'output_tokens', 0),
+            'total_tokens': getattr(usage_metadata, 'total_tokens', 0)
+          }
+          logger.info(f"토큰 정보 수집 성공 (Gemini): {tokens_info}")
+      except Exception as e:
+        logger.warning(f"메타데이터 수집 실패: {e}")
+        # 실패해도 계속 진행 (토큰 정보 없이 로그 저장)
+    
+    metadata["tokens"] = tokens_info
+    metadata["full_answer"] = full_answer
+    
     # 답변 생성 시간 계산
     end_time = time.time()
     latency = end_time - start_time
     
-    # 답변 내용 추출
-    full_answer = metadata.get("full_answer", "")
-    if hasattr(qa_message, 'content'):
-      full_answer = qa_message.content
-    elif not full_answer:
-      full_answer = str(qa_message)
-    
     # <br> 태그 처리: 테이블 내에서는 HTML <br>로 유지, 테이블 외부에서는 줄바꿈으로 변환
+    # 스트리밍 완료 후 처리
     def process_br_tags(text):
       # 테이블 패턴 찾기 (|로 시작하거나 끝나는 줄)
       lines = text.split('\n')
@@ -264,9 +370,8 @@ if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 
     processed_answer = process_br_tags(full_answer)
     full_answer = processed_answer
     
-    with st.chat_message("assistant"):  
-      # 답변 표시
-      st.markdown(full_answer, unsafe_allow_html=True)
+    # 처리된 답변으로 업데이트
+    answer_container.markdown(full_answer, unsafe_allow_html=True)
     
     # 법령 참조 추가 (답변에 법령명이나 조항이 있는 경우)
     full_answer_with_legal_refs = add_legal_references_to_answer(full_answer)

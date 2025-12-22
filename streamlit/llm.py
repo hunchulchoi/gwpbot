@@ -633,35 +633,13 @@ def get_rag_chain():
     ]
   )
   
-  # 질문 변환용 LLM: 빠른 응답을 위해 별도 LLM 인스턴스 사용 (max_tokens 제한)
-  # gpt-5-mini는 reasoning 모델이므로 질문 변환에는 제한된 토큰 사용
-  # 전역 llm 변수를 확인하여 모델 타입에 따라 최적화
-  try:
-    # llm이 ChatOpenAI 인스턴스인지 확인
-    if isinstance(llm, ChatOpenAI):
-      # 모델 이름 확인 (model 속성 또는 model_name 속성)
-      model_name = getattr(llm, 'model', None) or getattr(llm, 'model_name', None) or "gpt-5-mini"
-      # 질문 변환은 간단하므로 작은 max_tokens로 빠르게 처리
-      # timeout도 줄여서 빠른 응답
-      question_transform_llm = ChatOpenAI(
-        model=model_name, 
-        timeout=100, 
-        temperature=0  # 일관된 빠른 응답
-      )
-      logger.info(f"질문 변환용 LLM 생성: {model_name} (max_tokens=4000, timeout=50)")
-    else:
-      # 다른 모델은 기존 llm 사용
-      question_transform_llm = llm
-      logger.info("질문 변환용으로 기존 LLM 사용")
-  except Exception as e:
-    logger.warning(f"질문 변환용 LLM 생성 실패, 기존 llm 사용: {e}")
-    question_transform_llm = llm
+  
   
   # 질문 변환 체인: chat_history와 question을 받아 검색 쿼리(새로운 질문)를 생성
   # 성능 최적화: 간소화된 프롬프트와 제한된 토큰으로 빠른 응답
   history_aware_retriever = (
     contextualize_q_prompt 
-    | question_transform_llm 
+    | llm
     | StrOutputParser() 
     | base_retriever
   )
@@ -768,65 +746,17 @@ def get_ai_message(user_message:str,
   # 세션 ID를 설정에 추가
   config = {"configurable": {"session_id": session_id}}
   
-  # RAG 체인 실행 (invoke만 사용)
-  logger.info(f"Invoking RAG chain with session_id: {session_id} and question: {user_message}")
+  # RAG 체인 실행 (stream 사용)
+  logger.info(f"Streaming RAG chain with session_id: {session_id} and question: {user_message}")
   
-  # invoke로 실행하여 응답과 메타데이터를 한 번에 받음
-  qa_message = rag_chain.invoke({"question": user_message}, config=config)
+  # stream으로 실행하여 스트리밍 응답 반환
+  stream_generator = rag_chain.stream({"question": user_message}, config=config)
   
-  # 디버깅: qa_message 타입과 내용 확인
-  logger.info(f"qa_message type: {type(qa_message)}")
-  logger.info(f"qa_message has content attr: {hasattr(qa_message, 'content')}")
-  if hasattr(qa_message, 'content'):
-    logger.info(f"qa_message.content length: {len(qa_message.content) if qa_message.content else 0}")
-  
-  # LLM 응답에서 토큰 정보 추출
-  tokens_info = {}
-  if hasattr(qa_message, 'response_metadata'):
-    response_metadata = qa_message.response_metadata
-    # OpenAI 형식: response_metadata['token_usage']
-    if 'token_usage' in response_metadata:
-      token_usage = response_metadata['token_usage']
-      tokens_info = {
-        'prompt_tokens': token_usage.get('prompt_tokens', 0),
-        'completion_tokens': token_usage.get('completion_tokens', 0),
-        'total_tokens': token_usage.get('total_tokens', 0)
-      }
-  
-  # Google Gemini 형식: usage_metadata (AIMessage 속성)
-  if not tokens_info and hasattr(qa_message, 'usage_metadata'):
-    usage_metadata = qa_message.usage_metadata
-    tokens_info = {
-      'prompt_tokens': getattr(usage_metadata, 'input_tokens', 0),
-      'completion_tokens': getattr(usage_metadata, 'output_tokens', 0),
-      'total_tokens': getattr(usage_metadata, 'total_tokens', 0)
-    }
-  
-  # 답변 내용 추출 (AIMessage 객체에서 content 추출)
-  try:
-    if hasattr(qa_message, 'content'):
-      full_answer = qa_message.content or ""
-    elif hasattr(qa_message, 'text'):
-      full_answer = qa_message.text or ""
-    else:
-      # 딕셔너리나 다른 형태일 수도 있음
-      full_answer = str(qa_message) if qa_message else ""
-    
-    logger.info(f"full_answer extracted, length: {len(full_answer)}")
-    if not full_answer:
-      logger.warning(f"full_answer is empty! qa_message: {qa_message}, type: {type(qa_message)}")
-  except Exception as e:
-    logger.error(f"Error extracting full_answer: {e}")
-    full_answer = str(qa_message) if qa_message else ""
-  
-  # context는 빈 리스트로 설정 (별도 추출 필요 시 추가 구현)
-  context_docs = []
-  
-  # metadata 설정
+  # 스트리밍 제너레이터와 빈 metadata 반환 (실제 metadata는 스트리밍 완료 후 수집)
   metadata = {
-    "context": context_docs,
-    "full_answer": full_answer,
-    "tokens": tokens_info
+    "context": [],
+    "full_answer": "",
+    "tokens": {}
   }
 
-  return qa_message, metadata
+  return stream_generator, metadata
