@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # 애플리케이션 로깅 설정
 setup_logging()
 
-llm_model: LLMModel = LLMModel.GPT_5_NANO
+llm_model: LLMModel = LLMModel.GEMINI_3_FLASH
 embedding_model: EmbeddingModel = EmbeddingModel.OPENAI
 
 
@@ -209,7 +209,16 @@ if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 
       
       # chunk에서 텍스트 추출
       if hasattr(chunk, 'content'):
-        chunk_text = chunk.content if chunk.content else ""
+        if isinstance(chunk.content, list):
+          # chunk.content가 리스트인 경우 (예: 멀티모달 출력) 텍스트만 추출
+          chunk_text = ""
+          for item in chunk.content:
+            if isinstance(item, str):
+              chunk_text += item
+            elif isinstance(item, dict) and 'text' in item:
+              chunk_text += item['text']
+        else:
+          chunk_text = chunk.content if chunk.content else ""
       elif isinstance(chunk, str):
         chunk_text = chunk
       elif hasattr(chunk, 'text'):
@@ -253,11 +262,12 @@ if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 
       # Google Gemini 형식: usage_metadata
       if not tokens_info and hasattr(qa_message, 'usage_metadata'):
         usage_metadata = qa_message.usage_metadata
-        tokens_info = {
-          'prompt_tokens': getattr(usage_metadata, 'input_tokens', 0),
-          'completion_tokens': getattr(usage_metadata, 'output_tokens', 0),
-          'total_tokens': getattr(usage_metadata, 'total_tokens', 0)
-        }
+        if usage_metadata:
+          tokens_info = {
+            'prompt_tokens': usage_metadata.get('input_tokens', 0),
+            'completion_tokens': usage_metadata.get('output_tokens', 0),
+            'total_tokens': usage_metadata.get('total_tokens', 0)
+          }
         logger.info(f"스트리밍에서 토큰 정보 추출 성공 (Gemini): {tokens_info}")
     
     # 스트리밍에서 메타데이터를 얻지 못한 경우, 별도로 invoke() 호출하여 메타데이터 수집
@@ -292,11 +302,12 @@ if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 
         
         if not tokens_info and hasattr(qa_message_for_metadata, 'usage_metadata'):
           usage_metadata = qa_message_for_metadata.usage_metadata
-          tokens_info = {
-            'prompt_tokens': getattr(usage_metadata, 'input_tokens', 0),
-            'completion_tokens': getattr(usage_metadata, 'output_tokens', 0),
-            'total_tokens': getattr(usage_metadata, 'total_tokens', 0)
-          }
+          if usage_metadata:
+            tokens_info = {
+              'prompt_tokens': usage_metadata.get('input_tokens', 0),
+              'completion_tokens': usage_metadata.get('output_tokens', 0),
+              'total_tokens': usage_metadata.get('total_tokens', 0)
+            }
           logger.info(f"토큰 정보 수집 성공 (Gemini): {tokens_info}")
       except Exception as e:
         logger.warning(f"메타데이터 수집 실패: {e}")

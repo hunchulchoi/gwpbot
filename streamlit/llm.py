@@ -19,7 +19,7 @@ from langchain_chroma import Chroma
 from langchain_classic import hub
 
 from langchain_openai import ChatOpenAI
-from langchain_google_genai import GoogleGenerativeAI
+from langchain_google_genai import GoogleGenerativeAI, ChatGoogleGenerativeAI
 from langchain_ollama import OllamaLLM
 from langchain_openai import OpenAIEmbeddings
 from langchain_upstage import UpstageEmbeddings
@@ -103,19 +103,31 @@ def get_llm(llm_model:LLMModel=LLMModel.GPT_OSS_20B):
     return OllamaLLM(model="qwen3:latest")
   elif llm_model == LLMModel.GEMINI_2_5_FLASH:
     # timeout 300
-    gemini_llm = GoogleGenerativeAI(model="gemini-2.5-flash", timeout=100)
+    gemini_llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash", 
+        timeout=100,
+        transport="rest"
+    )
 
     logger.info(f'gemini_llm: {gemini_llm}')
 
     return gemini_llm
   elif llm_model == LLMModel.GEMINI_3_PRO:
     # timeout 300
-    gemini_llm = GoogleGenerativeAI(model="gemini-3-pro-preview", timeout=100)
+    gemini_llm = ChatGoogleGenerativeAI(
+        model="gemini-3-pro-preview", 
+        timeout=100,
+        transport="rest"
+    )
 
     return gemini_llm
   elif llm_model == LLMModel.GEMINI_3_FLASH:
     # timeout 300
-    gemini_llm = GoogleGenerativeAI(model="gemini-3-flash-preview", timeout=100)
+    gemini_llm = ChatGoogleGenerativeAI(
+        model="gemini-3-flash-preview", 
+        timeout=100,
+        transport="rest"
+    )
 
     return gemini_llm
   elif llm_model == LLMModel.GPT_5_MINI:
@@ -255,7 +267,7 @@ def save_log_to_supabase(session_id, question, answer, model, latency, tokens, s
   """
   로그를 Supabase에 저장합니다.
   """
-  logger.info(f'save_log_to_supabase started')
+  logger.info(f'save_log_to_supabase started - tokens: {tokens}, retrieved_documents: {source_documents}')
 
   # LLMModel enum인 경우 .value로 문자열 변환
   model_name = model.value if hasattr(model, 'value') else str(model)
@@ -746,17 +758,35 @@ def get_ai_message(user_message:str,
   # 세션 ID를 설정에 추가
   config = {"configurable": {"session_id": session_id}}
   
-  # RAG 체인 실행 (stream 사용)
-  logger.info(f"Streaming RAG chain with session_id: {session_id} and question: {user_message}")
-  
-  # stream으로 실행하여 스트리밍 응답 반환
-  stream_generator = rag_chain.stream({"question": user_message}, config=config)
-  
+  # CallbackHandler 정의: 검색된 문서 캡처
+  from langchain_core.callbacks import BaseCallbackHandler
+
+  class RetrievalCallbackHandler(BaseCallbackHandler):
+      def __init__(self, metadata):
+          self.metadata = metadata
+
+      def on_retriever_end(self, documents, **kwargs):
+          # 검색된 문서들을 metadata에 저장
+          self.metadata["context"] = documents
+          logger.info(f"Retrieved {len(documents)} documents via callback")
+
   # 스트리밍 제너레이터와 빈 metadata 반환 (실제 metadata는 스트리밍 완료 후 수집)
   metadata = {
     "context": [],
     "full_answer": "",
     "tokens": {}
   }
+  
+  # CallbackHandler 인스턴스 생성
+  callback_handler = RetrievalCallbackHandler(metadata)
+  
+  # config에 callback 추가
+  config["callbacks"] = [callback_handler]
+
+  # RAG 체인 실행 (stream 사용)
+  logger.info(f"Streaming RAG chain with session_id: {session_id} and question: {user_message}")
+  
+  # stream으로 실행하여 스트리밍 응답 반환
+  stream_generator = rag_chain.stream({"question": user_message}, config=config)
 
   return stream_generator, metadata
