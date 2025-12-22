@@ -466,8 +466,14 @@ def get_dictionary_chain():
   logger.info('get_dictionary_chain started')
 
   # LLM 호출 없이 단순 문자열 치환으로 변경하여 성능 향상
-  def normalize_question(question: str) -> str:
+  def normalize_question(input_data) -> str:
     """질문 정규화: 맞복 -> 맞춤형복지"""
+    # 딕셔너리인 경우 "question" 키에서 추출, 문자열인 경우 그대로 사용
+    if isinstance(input_data, dict):
+      question = input_data.get("question", "")
+    else:
+      question = str(input_data)
+    
     normalized = question.replace("맞복", "맞춤형복지")
     return normalized
 
