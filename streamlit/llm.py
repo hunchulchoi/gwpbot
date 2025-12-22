@@ -52,6 +52,7 @@ class LLMModel(Enum):
   EXAONE4_0_32B = 'exaone4.0:32b'
   GEMINI_2_5_FLASH = 'gemini-2.5-flash'
   GEMINI_3_PRO = 'gemini-3-pro-preview'
+  GEMINI_3_FLASH = 'gemini-3-flash-preview'
   GPT_5_MINI = 'gpt-5-mini'
   GPT_5_NANO = 'gpt-5-nano'
   GPT_4o_MINI = 'gpt-4o-mini'
@@ -104,10 +105,17 @@ def get_llm(llm_model:LLMModel=LLMModel.GPT_OSS_20B):
     # timeout 300
     gemini_llm = GoogleGenerativeAI(model="gemini-2.5-flash", timeout=100)
 
+    logger.info(f'gemini_llm: {gemini_llm}')
+
     return gemini_llm
   elif llm_model == LLMModel.GEMINI_3_PRO:
     # timeout 300
     gemini_llm = GoogleGenerativeAI(model="gemini-3-pro-preview", timeout=100)
+
+    return gemini_llm
+  elif llm_model == LLMModel.GEMINI_3_FLASH:
+    # timeout 300
+    gemini_llm = GoogleGenerativeAI(model="gemini-3-flash-preview", timeout=100)
 
     return gemini_llm
   elif llm_model == LLMModel.GPT_5_MINI:
@@ -239,7 +247,7 @@ def get_retriever_pinecone():
   logger.info(f'get_retriever with embedding model: {embedding.model}')
 
   pinecone_db = PineconeVectorStore(index_name="gwp", embedding=embedding)
-  retriever = pinecone_db.as_retriever(search_kwargs={"k": 3})
+  retriever = pinecone_db.as_retriever(search_kwargs={"k": 5})
   return retriever
 
 

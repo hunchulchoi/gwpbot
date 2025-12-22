@@ -31,8 +31,6 @@ llm_model: LLMModel = LLMModel.GPT_4o_MINI
 embedding_model: EmbeddingModel = EmbeddingModel.OPENAI
 
 
-
-
 # session_id 초기화: 쿠키에서 device_id를 확인하거나 새로 생성
 if 'session_id' not in st.session_state:
   # 쿼리 파라미터에서 device_id 확인 (JavaScript가 쿠키에서 읽어서 설정한 값)
@@ -125,12 +123,35 @@ if not st.session_state.authenticated:
   if st.session_state.failed_attempts > 0:
     st.warning(f"비밀번호 입력 실패: {st.session_state.failed_attempts}회")
   
-  password = st.text_input("비밀번호를 입력하세요", type="password", max_chars=7)
-  
   # .env에서 비밀번호 가져오기
   correct_password = os.getenv("CHATBOT_PASSWORD", "8022912")  # 기본값은 8022912
   
-  if st.button("확인"):
+  # st.form을 사용하여 엔터 키로 제출 가능하게 만들기
+  with st.form("password_form"):
+    password = st.text_input("비밀번호를 입력하세요", type="password", max_chars=7, autocomplete="off")
+    submitted = st.form_submit_button("확인", use_container_width=True)
+  
+  # autofocus를 위한 JavaScript 추가
+  components.html("""
+    <script>
+      (function() {
+        // 비밀번호 입력 필드에 autofocus
+        const inputs = document.querySelectorAll('input[type="password"]');
+        if (inputs.length > 0) {
+          inputs[0].focus();
+        }
+        
+        // 엔터 키 이벤트 처리 (st.form이 이미 처리하지만 추가 보장)
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter' && e.target.type === 'password') {
+            // form submit은 st.form이 자동으로 처리
+          }
+        });
+      })();
+    </script>
+  """, height=0)
+  
+  if submitted:
     if password == correct_password:
       # 비밀번호가 맞으면 인증 성공 및 실패 횟수 초기화
       st.session_state.authenticated = True
