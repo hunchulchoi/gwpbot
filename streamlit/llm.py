@@ -29,6 +29,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.tools import StructuredTool
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from pydantic import BaseModel, Field
 import json
 import re
@@ -53,6 +54,7 @@ class LLMModel(Enum):
   GEMINI_3_PRO = 'gemini-3-pro-preview'
   GPT_5_MINI = 'gpt-5-mini'
   GPT_5_NANO = 'gpt-5-nano'
+  GPT_4o_MINI = 'gpt-4o-mini'
 
 
 class EmbeddingModel(Enum):
@@ -120,13 +122,92 @@ def get_llm(llm_model:LLMModel=LLMModel.GPT_OSS_20B):
     gpt_nano_llm = ChatOpenAI(model="gpt-5-nano", timeout=100)
 
     return gpt_nano_llm
+  elif llm_model == LLMModel.GPT_4o_MINI:
+    # timeout 300
+    gpt_4o_mini_llm = ChatOpenAI(model="gpt-4o-mini", timeout=100)
+
+    return gpt_4o_mini_llm
 
 
 def get_session_history(session_id: str) -> InMemoryChatMessageHistory:
-  """세션 ID에 따른 대화 이력 저장소를 반환합니다."""
+  """
+  세션 ID에 따른 대화 이력 저장소를 반환합니다. 
+  최근 3턴(6개 메시지)만 유지하거나, 오래된 대화를 요약하여 기억합니다.
+  """
   if session_id not in store:
     store[session_id] = InMemoryChatMessageHistory()
-  return store[session_id]
+  
+  history = store[session_id]
+  messages = history.messages
+  
+  # 최근 3턴(6개 메시지)만 유지: user + assistant = 1턴
+  MAX_TURNS = 3
+  MAX_MESSAGES = MAX_TURNS * 2  # 6개 메시지 (질문 3개 + 답변 3개)
+  
+  if len(messages) > MAX_MESSAGES:
+    # 방법 1: 최근 메시지만 유지 (간단하고 빠름)
+    # messages_to_keep = messages[-MAX_MESSAGES:]
+    # history.clear()
+    # for msg in messages_to_keep:
+    #   history.add_message(msg)
+    # logger.info(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
+    
+    # 방법 2: 오래된 대화를 요약하여 기억 (더 많은 컨텍스트 유지)
+    from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+    
+    # 오래된 메시지와 최신 메시지 분리
+    old_messages = messages[:-MAX_MESSAGES]
+    recent_messages = messages[-MAX_MESSAGES:]
+    
+    # 오래된 대화를 요약
+    if old_messages and llm:
+      try:
+        # 대화 내용 추출
+        conversation_text = ""
+        for msg in old_messages:
+          if hasattr(msg, 'content'):
+            role = "사용자" if isinstance(msg, HumanMessage) else "어시스턴트"
+            conversation_text += f"{role}: {msg.content}\n"
+        
+        # 요약 프롬프트
+        summary_prompt = f"""다음 대화 내용을 간단히 요약해주세요. 주요 질문과 답변의 핵심만 2-3문장으로 요약하세요.
+
+대화 내용:
+{conversation_text}
+
+요약:"""
+        
+        # LLM으로 요약 생성
+        summary_response = llm.invoke(summary_prompt)
+        summary_text = summary_response.content if hasattr(summary_response, 'content') else str(summary_response)
+        
+        # 요약을 시스템 메시지로 추가
+        summary_msg = SystemMessage(content=f"[이전 대화 요약] {summary_text}")
+        
+        # 이력 재구성: 요약 + 최신 메시지
+        history.clear()
+        history.add_message(summary_msg)
+        for msg in recent_messages:
+          history.add_message(msg)
+        
+        logger.info(f"대화 이력 요약: {len(messages)}개 -> 요약 1개 + 최신 {len(recent_messages)}개 메시지")
+      except Exception as e:
+        logger.warning(f"대화 이력 요약 실패, 최근 메시지만 유지: {e}")
+        # 요약 실패 시 최근 메시지만 유지
+        messages_to_keep = messages[-MAX_MESSAGES:]
+        history.clear()
+        for msg in messages_to_keep:
+          history.add_message(msg)
+        logger.info(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
+    else:
+      # LLM이 없거나 오래된 메시지가 없으면 최근 메시지만 유지
+      messages_to_keep = messages[-MAX_MESSAGES:]
+      history.clear()
+      for msg in messages_to_keep:
+        history.add_message(msg)
+      logger.info(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
+  
+  return history
 
 
 def get_retriever_chroma():
@@ -556,11 +637,10 @@ def get_rag_chain():
       # timeout도 줄여서 빠른 응답
       question_transform_llm = ChatOpenAI(
         model=model_name, 
-        timeout=50, 
-        max_tokens=100,
+        timeout=100, 
         temperature=0  # 일관된 빠른 응답
       )
-      logger.info(f"질문 변환용 LLM 생성: {model_name} (max_tokens=100, timeout=50)")
+      logger.info(f"질문 변환용 LLM 생성: {model_name} (max_tokens=4000, timeout=50)")
     else:
       # 다른 모델은 기존 llm 사용
       question_transform_llm = llm
@@ -584,7 +664,6 @@ def get_rag_chain():
   
   # RAG 프롬프트에 few-shot 예시와 context를 결합
   rag_prompt_template = f"""You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. 
-If you don't know the answer, just say that you don't know. 
 
 욕을하거나 모욕하는 경우에 대답을 거부하고 정중히 질문해 달라고 요청하세요
 이제 다음 컨텍스트를 사용하여 질문에 답변하세요. 위의 예시 형식을 참고하여 답변하되, 컨텍스트에 있는 정보를 정확히 사용하세요.

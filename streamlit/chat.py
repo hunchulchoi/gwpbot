@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # 애플리케이션 로깅 설정
 setup_logging()
 
-llm_model: LLMModel = LLMModel.GPT_5_MINI
+llm_model: LLMModel = LLMModel.GPT_4o_MINI
 embedding_model: EmbeddingModel = EmbeddingModel.OPENAI
 
 
