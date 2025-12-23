@@ -7,10 +7,16 @@ import threading
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     # dotenv가 없으면 환경 변수만 사용 (Streamlit Cloud Secrets 사용)
     pass
+
+os.environ["GRPC_DNS_RESOLVER"] = "native"
+
+from utils.supabase_utils import save_log_to_supabase, save_report_to_supabase
+from utils.legal_tool import add_legal_references_to_answer
 
 from langchain_core.chat_history import InMemoryChatMessageHistory
 
@@ -19,20 +25,26 @@ from langchain_chroma import Chroma
 from langchain_classic import hub
 
 from langchain_openai import ChatOpenAI
-from langchain_google_genai import GoogleGenerativeAI, ChatGoogleGenerativeAI
+from langchain_google_genai import (
+    GoogleGenerativeAI,
+    ChatGoogleGenerativeAI,
+    GoogleGenerativeAIEmbeddings,
+)
 from langchain_ollama import OllamaLLM
 from langchain_openai import OpenAIEmbeddings
 from langchain_upstage import UpstageEmbeddings
 from langchain_ollama import OllamaEmbeddings
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableParallel, RunnablePassthrough, RunnableLambda
+from langchain_core.runnables import (
+    RunnableParallel,
+    RunnablePassthrough,
+    RunnableLambda,
+)
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.tools import StructuredTool
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from pydantic import BaseModel, Field
-import json
-import re
+
 logger = logging.getLogger(__name__)
 
 from langchain_core.runnables.history import RunnableWithMessageHistory
@@ -42,537 +54,245 @@ from supabase import create_client, Client
 supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
 
+index_name: str = "gwp-gemini3"
+
+
 class LLMModel(Enum):
-  GPT_OSS_20B = 'gpt-oss:20b'
-  KANANA_1_5_8B = 'kanana-1.5-8b'
-  CLOVAX = 'clovax'
-  QWEN3_30B = 'qwen3:30b'
-  QWEN3_14B = 'qwen3:14b'
-  QWEN3_8B = 'qwen3:latest'
-  EXAONE4_0_32B = 'exaone4.0:32b'
-  GEMINI_2_5_FLASH = 'gemini-2.5-flash'
-  GEMINI_3_PRO = 'gemini-3-pro-preview'
-  GEMINI_3_FLASH = 'gemini-3-flash-preview'
-  GPT_5_MINI = 'gpt-5-mini'
-  GPT_5_NANO = 'gpt-5-nano'
-  GPT_4o_MINI = 'gpt-4o-mini'
+    GPT_OSS_20B = "gpt-oss:20b"
+    KANANA_1_5_8B = "kanana-1.5-8b"
+    CLOVAX = "clovax"
+    QWEN3_30B = "qwen3:30b"
+    QWEN3_14B = "qwen3:14b"
+    QWEN3_8B = "qwen3:latest"
+    EXAONE4_0_32B = "exaone4.0:32b"
+    GEMINI_2_5_FLASH = "gemini-2.5-flash"
+    GEMINI_3_PRO = "gemini-3-pro-preview"
+    GEMINI_3_FLASH = "gemini-3-flash-preview"
+    GPT_5_MINI = "gpt-5-mini"
+    GPT_5_NANO = "gpt-5-nano"
+    GPT_4o_MINI = "gpt-4o-mini"
 
 
 class EmbeddingModel(Enum):
-  OPENAI = "text-embedding-3-smal"
-  UPSTAGE = "embedding-query"
-  QWEN3_8B = "qwen3-embedding:8b"
-  QWEN3_4B = "qwen3-embedding:4b"
+    GEMINI001 = "gemini-embedding-001"
+    OPENAI = "text-embedding-3-smal"
+    UPSTAGE = "embedding-query"
+    QWEN3_8B = "qwen3-embedding:8b"
+    QWEN3_4B = "qwen3-embedding:4b"
+
 
 class VectorStore(Enum):
-  PINECONE = "pinecone"
-  CHROMA = "chroma"
+    PINECONE = "pinecone"
+    CHROMA = "chroma"
 
 
-def get_embedding_model(embedding_model:EmbeddingModel=EmbeddingModel.UPSTAGE):
-  """임베딩 모델 인스턴스를 반환합니다."""
+def get_embedding_model(embedding_model: EmbeddingModel = EmbeddingModel.UPSTAGE):
+    """임베딩 모델 인스턴스를 반환합니다."""
 
-  if embedding_model == EmbeddingModel.OPENAI:
-    return OpenAIEmbeddings(model="text-embedding-3-small")
-  elif embedding_model == EmbeddingModel.UPSTAGE:
-    return UpstageEmbeddings(model="embedding-query")
-  elif embedding_model == EmbeddingModel.QWEN3_8B:
-    return OllamaEmbeddings(model="qwen3-embedding")
-  elif embedding_model == EmbeddingModel.QWEN3_4B:
-    return OllamaEmbeddings(model="qwen3-embedding:4b")
+    if embedding_model == EmbeddingModel.OPENAI:
+        return OpenAIEmbeddings(model="text-embedding-3-small")
+    elif embedding_model == EmbeddingModel.UPSTAGE:
+        return UpstageEmbeddings(model="embedding-query")
+    elif embedding_model == EmbeddingModel.QWEN3_8B:
+        return OllamaEmbeddings(model="qwen3-embedding")
+    elif embedding_model == EmbeddingModel.QWEN3_4B:
+        return OllamaEmbeddings(model="qwen3-embedding:4b")
+    elif embedding_model == EmbeddingModel.GEMINI001:
+        return GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
 
 
+def get_llm(llm_model: LLMModel = LLMModel.GPT_OSS_20B):
+    """LLM 인스턴스를 반환합니다."""
 
-def get_llm(llm_model:LLMModel=LLMModel.GPT_OSS_20B):
-  """LLM 인스턴스를 반환합니다."""
+    logger.debug(f"llm_model: {llm_model}")
+    if llm_model == LLMModel.EXAONE4_0_32B:
+        return OllamaLLM(model="ingu627/exaone4.0:32b")
+    elif llm_model == LLMModel.GPT_OSS_20B:
+        return OllamaLLM(model="gpt-oss:20b")
+    elif llm_model == LLMModel.KANANA_1_5_8B:
+        return OllamaLLM(model="coolsoon/kanana-1.5-8b")
+    elif llm_model == LLMModel.CLOVAX:
+        return OllamaLLM(model="joonoh/HyperCLOVAX-SEED-Text-Instruct-1.5B")
+    elif llm_model == LLMModel.QWEN3_30B:
+        return OllamaLLM(model="qwen3:30b")
+    elif llm_model == LLMModel.QWEN3_14B:
+        return OllamaLLM(model="qwen3:14b")
+    elif llm_model == LLMModel.QWEN3_8B:
+        return OllamaLLM(model="qwen3:latest")
+    elif llm_model == LLMModel.GEMINI_2_5_FLASH:
+        # timeout 300
+        gemini_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", timeout=100)
 
-  logger.debug(f'llm_model: {llm_model}')
-  if llm_model == LLMModel.EXAONE4_0_32B:
-    return OllamaLLM(model="ingu627/exaone4.0:32b")
-  elif llm_model == LLMModel.GPT_OSS_20B:
-    return OllamaLLM(model="gpt-oss:20b")
-  elif llm_model == LLMModel.KANANA_1_5_8B:
-    return OllamaLLM(model="coolsoon/kanana-1.5-8b")
-  elif llm_model == LLMModel.CLOVAX:
-    return OllamaLLM(model="joonoh/HyperCLOVAX-SEED-Text-Instruct-1.5B")
-  elif llm_model == LLMModel.QWEN3_30B:
-    return OllamaLLM(model="qwen3:30b")
-  elif llm_model == LLMModel.QWEN3_14B:
-    return OllamaLLM(model="qwen3:14b")
-  elif llm_model == LLMModel.QWEN3_8B:
-    return OllamaLLM(model="qwen3:latest")
-  elif llm_model == LLMModel.GEMINI_2_5_FLASH:
-    # timeout 300
-    gemini_llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", 
-        timeout=100,
-        transport="rest"
-    )
+        logger.debug(f"gemini_llm: {gemini_llm}")
 
-    logger.debug(f'gemini_llm: {gemini_llm}')
+        return gemini_llm
+    elif llm_model == LLMModel.GEMINI_3_PRO:
+        # timeout 300
+        gemini_llm = ChatGoogleGenerativeAI(
+            model="gemini-3-pro-preview", timeout=100, transport="rest"
+        )
 
-    return gemini_llm
-  elif llm_model == LLMModel.GEMINI_3_PRO:
-    # timeout 300
-    gemini_llm = ChatGoogleGenerativeAI(
-        model="gemini-3-pro-preview", 
-        timeout=100,
-        transport="rest"
-    )
+        return gemini_llm
+    elif llm_model == LLMModel.GEMINI_3_FLASH:
+        # timeout 300
+        gemini_llm = ChatGoogleGenerativeAI(model="gemini-3-flash-preview", timeout=100)
 
-    return gemini_llm
-  elif llm_model == LLMModel.GEMINI_3_FLASH:
-    # timeout 300
-    gemini_llm = ChatGoogleGenerativeAI(
-        model="gemini-3-flash-preview", 
-        timeout=100,
-        transport="rest"
-    )
+        return gemini_llm
+    elif llm_model == LLMModel.GPT_5_MINI:
+        # gpt-5-mini는 reasoning 모델이므로 reasoning 토큰 + completion 토큰을 모두 고려해야 함
+        # reasoning에 1500 토큰을 사용하면 실제 답변이 생성되지 않을 수 있으므로 충분히 크게 설정
+        # timeout 300, max_tokens를 충분히 크게 설정하여 reasoning 후 실제 답변도 생성되도록 함
+        gpt_mini_llm = ChatOpenAI(model="gpt-5-mini", timeout=100, max_tokens=4000)
 
-    return gemini_llm
-  elif llm_model == LLMModel.GPT_5_MINI:
-    # gpt-5-mini는 reasoning 모델이므로 reasoning 토큰 + completion 토큰을 모두 고려해야 함
-    # reasoning에 1500 토큰을 사용하면 실제 답변이 생성되지 않을 수 있으므로 충분히 크게 설정
-    # timeout 300, max_tokens를 충분히 크게 설정하여 reasoning 후 실제 답변도 생성되도록 함
-    gpt_mini_llm = ChatOpenAI(model="gpt-5-mini", timeout=100, max_tokens=4000)
+        return gpt_mini_llm
+    elif llm_model == LLMModel.GPT_5_NANO:
+        # timeout 300
+        gpt_nano_llm = ChatOpenAI(model="gpt-5-nano", timeout=100)
 
-    return gpt_mini_llm
-  elif llm_model == LLMModel.GPT_5_NANO:
-    # timeout 300
-    gpt_nano_llm = ChatOpenAI(model="gpt-5-nano", timeout=100)
+        return gpt_nano_llm
+    elif llm_model == LLMModel.GPT_4o_MINI:
+        # timeout 300
+        gpt_4o_mini_llm = ChatOpenAI(model="gpt-4o-mini", timeout=100)
 
-    return gpt_nano_llm
-  elif llm_model == LLMModel.GPT_4o_MINI:
-    # timeout 300
-    gpt_4o_mini_llm = ChatOpenAI(model="gpt-4o-mini", timeout=100)
-
-    return gpt_4o_mini_llm
+        return gpt_4o_mini_llm
 
 
 def get_session_history(session_id: str) -> InMemoryChatMessageHistory:
-  """
-  세션 ID에 따른 대화 이력 저장소를 반환합니다. 
-  최근 3턴(6개 메시지)만 유지하거나, 오래된 대화를 요약하여 기억합니다.
-  """
-  if session_id not in store:
-    store[session_id] = InMemoryChatMessageHistory()
-  
-  history = store[session_id]
-  messages = history.messages
-  
-  # 최근 3턴(6개 메시지)만 유지: user + assistant = 1턴
-  MAX_TURNS = 3
-  MAX_MESSAGES = MAX_TURNS * 2  # 6개 메시지 (질문 3개 + 답변 3개)
-  
-  if len(messages) > MAX_MESSAGES:
-    # 방법 1: 최근 메시지만 유지 (간단하고 빠름)
-    # messages_to_keep = messages[-MAX_MESSAGES:]
-    # history.clear()
-    # for msg in messages_to_keep:
-    #   history.add_message(msg)
-    # logger.debug(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
-    
-    # 방법 2: 오래된 대화를 요약하여 기억 (더 많은 컨텍스트 유지)
-    from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-    
-    # 오래된 메시지와 최신 메시지 분리
-    old_messages = messages[:-MAX_MESSAGES]
-    recent_messages = messages[-MAX_MESSAGES:]
-    
-    # 오래된 대화를 요약
-    if old_messages and llm:
-      try:
-        # 대화 내용 추출
-        conversation_text = ""
-        for msg in old_messages:
-          if hasattr(msg, 'content'):
-            role = "사용자" if isinstance(msg, HumanMessage) else "어시스턴트"
-            conversation_text += f"{role}: {msg.content}\n"
-        
-        # 요약 프롬프트
-        summary_prompt = f"""다음 대화 내용을 간단히 요약해주세요. 주요 질문과 답변의 핵심만 2-3문장으로 요약하세요.
+    """
+    세션 ID에 따른 대화 이력 저장소를 반환합니다.
+    최근 3턴(6개 메시지)만 유지하거나, 오래된 대화를 요약하여 기억합니다.
+    """
+    if session_id not in store:
+        store[session_id] = InMemoryChatMessageHistory()
+
+    history = store[session_id]
+    messages = history.messages
+
+    # 최근 3턴(6개 메시지)만 유지: user + assistant = 1턴
+    MAX_TURNS = 3
+    MAX_MESSAGES = MAX_TURNS * 2  # 6개 메시지 (질문 3개 + 답변 3개)
+
+    if len(messages) > MAX_MESSAGES:
+        # 방법 1: 최근 메시지만 유지 (간단하고 빠름)
+        # messages_to_keep = messages[-MAX_MESSAGES:]
+        # history.clear()
+        # for msg in messages_to_keep:
+        #   history.add_message(msg)
+        # logger.debug(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
+
+        # 방법 2: 오래된 대화를 요약하여 기억 (더 많은 컨텍스트 유지)
+        from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+
+        # 오래된 메시지와 최신 메시지 분리
+        old_messages = messages[:-MAX_MESSAGES]
+        recent_messages = messages[-MAX_MESSAGES:]
+
+        # 오래된 대화를 요약
+        if old_messages and llm:
+            try:
+                # 대화 내용 추출
+                conversation_text = ""
+                for msg in old_messages:
+                    if hasattr(msg, "content"):
+                        role = (
+                            "사용자" if isinstance(msg, HumanMessage) else "어시스턴트"
+                        )
+                        conversation_text += f"{role}: {msg.content}\n"
+
+                # 요약 프롬프트
+                summary_prompt = f"""다음 대화 내용을 간단히 요약해주세요. 주요 질문과 답변의 핵심만 2-3문장으로 요약하세요.
 
 대화 내용:
 {conversation_text}
 
 요약:"""
-        
-        # LLM으로 요약 생성
-        summary_response = llm.invoke(summary_prompt)
-        summary_text = summary_response.content if hasattr(summary_response, 'content') else str(summary_response)
-        
-        # 요약을 시스템 메시지로 추가
-        summary_msg = SystemMessage(content=f"[이전 대화 요약] {summary_text}")
-        
-        # 이력 재구성: 요약 + 최신 메시지
-        history.clear()
-        history.add_message(summary_msg)
-        for msg in recent_messages:
-          history.add_message(msg)
-        
-        logger.debug(f"대화 이력 요약: {len(messages)}개 -> 요약 1개 + 최신 {len(recent_messages)}개 메시지")
-      except Exception as e:
-        logger.warning(f"대화 이력 요약 실패, 최근 메시지만 유지: {e}")
-        # 요약 실패 시 최근 메시지만 유지
-        messages_to_keep = messages[-MAX_MESSAGES:]
-        history.clear()
-        for msg in messages_to_keep:
-          history.add_message(msg)
-        logger.debug(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
-    else:
-      # LLM이 없거나 오래된 메시지가 없으면 최근 메시지만 유지
-      messages_to_keep = messages[-MAX_MESSAGES:]
-      history.clear()
-      for msg in messages_to_keep:
-        history.add_message(msg)
-      logger.debug(f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소")
-  
-  return history
+
+                # LLM으로 요약 생성
+                summary_response = llm.invoke(summary_prompt)
+                summary_text = (
+                    summary_response.content
+                    if hasattr(summary_response, "content")
+                    else str(summary_response)
+                )
+
+                # 요약을 시스템 메시지로 추가
+                summary_msg = SystemMessage(content=f"[이전 대화 요약] {summary_text}")
+
+                # 이력 재구성: 요약 + 최신 메시지
+                history.clear()
+                history.add_message(summary_msg)
+                for msg in recent_messages:
+                    history.add_message(msg)
+
+                logger.debug(
+                    f"대화 이력 요약: {len(messages)}개 -> 요약 1개 + 최신 {len(recent_messages)}개 메시지"
+                )
+            except Exception as e:
+                logger.warning(f"대화 이력 요약 실패, 최근 메시지만 유지: {e}")
+                # 요약 실패 시 최근 메시지만 유지
+                messages_to_keep = messages[-MAX_MESSAGES:]
+                history.clear()
+                for msg in messages_to_keep:
+                    history.add_message(msg)
+                logger.debug(
+                    f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소"
+                )
+        else:
+            # LLM이 없거나 오래된 메시지가 없으면 최근 메시지만 유지
+            messages_to_keep = messages[-MAX_MESSAGES:]
+            history.clear()
+            for msg in messages_to_keep:
+                history.add_message(msg)
+            logger.debug(
+                f"대화 이력 제한: {len(messages)}개 -> {len(history.messages)}개 메시지로 축소"
+            )
+
+    return history
 
 
 def get_retriever_chroma():
-  """Chroma DB 기반의 Retriver를 반환합니다."""
-  logger.debug(f'get_retriever with embedding model: {embedding.model}')
+    """Chroma DB 기반의 Retriver를 반환합니다."""
+    logger.debug(f"get_retriever with embedding model: {embedding.model}")
 
-  collection_name = f"welfare_manual_{embedding.model.replace(':', '_')}"
-  persist_directory = os.path.join(os.getcwd(), "chroma_db")
+    collection_name = f"welfare_manual_{embedding.model.replace(':', '_')}"
+    persist_directory = os.path.join(os.getcwd(), "chroma_db")
 
-  #print('collection_name', collection_name)
+    # print('collection_name', collection_name)
 
-  logger.debug(f"{persist_directory}/{collection_name}")
+    logger.debug(f"{persist_directory}/{collection_name}")
 
-  database = Chroma(
-    collection_name=collection_name,
-    persist_directory=persist_directory,
-    embedding_function=embedding,
-  )
-  retriever = database.as_retriever(search_kwargs={"k": 3})
-  #retriever = database.as_retriever()
+    database = Chroma(
+        collection_name=collection_name,
+        persist_directory=persist_directory,
+        embedding_function=embedding,
+    )
+    retriever = database.as_retriever(search_kwargs={"k": 3})
+    # retriever = database.as_retriever()
 
-  logger.debug(f'Retriever initialized for collection: {collection_name}')
+    logger.debug(f"Retriever initialized for collection: {collection_name}")
 
-  return retriever
+    return retriever
 
 
 def get_retriever_pinecone():
-  """Pinecone DB 기반의 Retriver를 반환합니다."""
-  logger.debug(f'get_retriever with embedding model: {embedding.model}')
+    """Pinecone DB 기반의 Retriver를 반환합니다."""
+    logger.debug(f"get_retriever with embedding model: {embedding.model}")
 
-  pinecone_db = PineconeVectorStore(index_name="gwp", embedding=embedding)
-  retriever = pinecone_db.as_retriever(search_kwargs={"k": 4})
-  return retriever
+    global index_name
 
-
-def save_log_to_supabase(session_id, question, answer, model, latency, tokens, source_documents):
-  """
-  로그를 Supabase에 저장합니다.
-  """
-  logger.debug(f'save_log_to_supabase started - tokens: {tokens}, retrieved_documents: {source_documents}')
-
-  # LLMModel enum인 경우 .value로 문자열 변환
-  model_name = model.value if hasattr(model, 'value') else str(model)
-
-  # Document 객체를 JSON serializable한 딕셔너리로 변환 (id, score, section 포함)
-  serialized_sources = []
-  for doc in source_documents:
-    if hasattr(doc, 'page_content') and hasattr(doc, 'metadata'):
-      # Document 객체에서 id 추출 (metadata의 id를 우선 사용)
-      doc_id = None
-      if isinstance(doc.metadata, dict):
-        doc_id = doc.metadata.get("id", doc.metadata.get("_id", None))
-      # metadata에 id가 없으면 Document.id 속성 사용
-      if not doc_id and hasattr(doc, 'id'):
-        doc_id = doc.id
-      
-      # score 추출 (metadata에서)
-      doc_score = None
-      if isinstance(doc.metadata, dict):
-        doc_score = doc.metadata.get("score", None)
-      
-      # section 추출 (metadata에서 section_path 우선, 없으면 section)
-      doc_section = None
-      if isinstance(doc.metadata, dict):
-        doc_section = doc.metadata.get("section_path") or doc.metadata.get("section")
-        # section이 리스트인 경우 문자열로 변환
-        if isinstance(doc_section, list):
-          doc_section = " > ".join(str(s) for s in doc_section)
-      
-      # id, score, section 저장
-      serialized_sources.append({
-        "id": doc_id,
-        "score": doc_score,
-        "section": doc_section
-      })
-    elif isinstance(doc, dict):
-      # dict인 경우 id, score, section 추출
-      section = doc.get("section_path") or doc.get("section")
-      # section이 리스트인 경우 문자열로 변환
-      if isinstance(section, list):
-        section = " > ".join(str(s) for s in section)
-      
-      serialized_sources.append({
-        "id": doc.get("id", doc.get("_id", None)),
-        "score": doc.get("score", None),
-        "section": section
-      })
-    else:
-      # 다른 형태인 경우 id, score, section만
-      serialized_sources.append({"id": None, "score": None, "section": None})
-
-  # 토큰 정보 추출
-  prompt_tokens = tokens.get("prompt_tokens", 0) if tokens else 0
-  completion_tokens = tokens.get("completion_tokens", 0) if tokens else 0
-  total_tokens = tokens.get("total_tokens", 0) if tokens else 0
-
-  data = {
-      "session_id": session_id,
-      "question": question,
-      "answer": answer,
-      "model_name": model_name,
-      "latency_seconds": latency,
-      "prompt_tokens": prompt_tokens,
-      "completion_tokens": completion_tokens,
-      "total_tokens": total_tokens,
-      
-      # Document 객체를 딕셔너리로 변환하여 전달
-      "retrieved_sources": serialized_sources 
-  }
-  
-  # 동기로 로그 저장 및 ID 반환
-  try:
-    response = supabase.table("chat_logs").insert(data).execute()
-    logger.debug(f"로그 저장 성공: session_id={session_id}")
-    if response.data and len(response.data) > 0:
-      return response.data[0]['id']
-    return None
-  except Exception as e:
-    logger.error(f"로그 저장 실패: {e}")
-    return None  
-
-
-def save_report_to_supabase(chat_id, reason, details):
-  """
-  사용자 신고를 Supabase에 저장합니다.
-  """
-  logger.debug(f'save_report_to_supabase started: {reason}')
-  
-  data = {
-      "chat_id": chat_id,
-      "reason": reason,
-      "details": details,
-  }
-  
-  def save_report_async():
-    try:
-      # 'feedback_reports' 테이블이 있다고 가정
-      # 없다면 Supabase에서 생성해야 함
-      # create table feedback_reports (
-      #   id bigint generated by default as identity primary key,
-      #   session_id text,
-      #   question text,
-      #   answer text,
-      #   reason text,
-      #   details text,
-      #   created_at timestamp with time zone default timezone('utc'::text, now())
-      # );
-      supabase.table("feedback_reports").insert(data).execute()
-      logger.debug(f"신고 저장 성공: chat_id={chat_id}")
-    except Exception as e:
-      logger.error(f"신고 저장 실패: {e}")
-      
-  # 별도 스레드에서 신고 저장 실행
-  thread = threading.Thread(target=save_report_async, daemon=True)
-  thread.start()  
-
-
-def load_legal_references():
-  """
-  legal_references.json 파일을 로드합니다.
-  """
-  current_dir = os.path.dirname(os.path.abspath(__file__))
-  legal_ref_path = os.path.join(current_dir, "..", "data", "2026", "legal_references.json")
-  
-  try:
-    with open(legal_ref_path, 'r', encoding='utf-8') as f:
-      data = json.load(f)
-    return data.get("legal_texts", [])
-  except Exception as e:
-    logger.error(f"법령 참조 파일 로드 실패: {e}")
-    return []
-
-
-def search_legal_reference(law_name: str = None, article: str = None, keyword: str = None) -> str:
-  """
-  법령 참조 데이터에서 법령명, 조항, 또는 키워드로 검색합니다.
-  
-  Args:
-    law_name: 법령명 (예: "공무원 후생복지에 관한 규정", "국가공무원법")
-    article: 조항 (예: "제2조", "제11조")
-    keyword: 검색 키워드
-  
-  Returns:
-    검색된 법령 조항들의 텍스트
-  """
-  legal_texts = load_legal_references()
-  results = []
-  
-  for law in legal_texts:
-    law_name_match = False
-    if law_name:
-      # 법령명 부분 일치 검색
-      if law_name.lower() in law["law_name"].lower() or law["law_name"].lower() in law_name.lower():
-        law_name_match = True
-    else:
-      law_name_match = True  # 법령명이 지정되지 않으면 모든 법령 검색
-    
-    if not law_name_match:
-      continue
-    
-    for provision in law["provisions"]:
-      match = False
-      
-      # 조항 검색
-      if article:
-        if article in provision["article"] or provision["article"] in article:
-          match = True
-      
-      # 키워드 검색
-      if keyword:
-        if (keyword.lower() in provision["content"].lower() or 
-            keyword.lower() in provision["article"].lower()):
-          match = True
-      
-      # 법령명만 지정된 경우 모든 조항 포함
-      if law_name and not article and not keyword:
-        match = True
-      
-      if match:
-        results.append({
-          "law_name": law["law_name"],
-          "article": provision["article"],
-          "content": provision["content"]
-        })
-  
-  if not results:
-    return "검색된 법령 조항이 없습니다."
-  
-  # 결과 포맷팅
-  formatted_results = []
-  for result in results:
-    formatted_results.append(
-      f"【{result['law_name']} {result['article']}】\n{result['content']}"
-    )
-  
-  return "\n\n".join(formatted_results)
-
-
-def get_legal_reference_tool():
-  """
-  법령 조회를 위한 LangChain Tool을 반환합니다.
-  """
-  class LegalReferenceInput(BaseModel):
-    law_name: str = Field(None, description="법령명 (예: '공무원 후생복지에 관한 규정', '국가공무원법', '공무원보수 등의 업무지침')")
-    article: str = Field(None, description="조항 번호 (예: '제2조', '제11조', '제10장')")
-    keyword: str = Field(None, description="검색할 키워드 (법령명, 조항, 내용에서 검색)")
-  
-  tool = StructuredTool.from_function(
-    func=search_legal_reference,
-    name="search_legal_reference",
-    description="""법령, 지침, 예규를 조회하는 도구입니다. 
-답변 내용 중에 관련 법령, 지침, 예규가 언급되거나 참조가 필요한 경우 이 도구를 사용하세요.
-법령명, 조항, 또는 키워드로 검색할 수 있습니다.""",
-    args_schema=LegalReferenceInput,
-    return_direct=False
-  )
-  
-  return tool
-
-
-def extract_legal_references_from_text(text: str) -> list[dict]:
-  """
-  텍스트에서 법령명과 조항을 추출합니다.
-  
-  Returns:
-    [{"law_name": "...", "article": "..."}, ...] 형태의 리스트
-  """
-  # 법령명 패턴 (예: "공무원 후생복지에 관한 규정", "국가공무원법", "공무원보수 등의 업무지침")
-  law_name_patterns = [
-    r"공무원 후생복지에 관한 규정",
-    r"국가공무원법",
-    r"공무원임용령",
-    r"공무원 수당 등에 관한 규정",
-    r"공무원보수 등의 업무지침",
-    r"상법",
-    r"보험업법",
-    r"국가유공자 등 예우 및 지원에 관한 법률",
-  ]
-  
-  # 조항 패턴 (예: "제2조", "제11조", "제10장")
-  article_pattern = r"제\d+[조장항호]"
-  
-  references = []
-  
-  # 법령명과 조항을 함께 찾기
-  for law_pattern in law_name_patterns:
-    # 법령명 다음에 조항이 오는 패턴 찾기
-    pattern = rf"({law_pattern})\s*({article_pattern})"
-    matches = re.finditer(pattern, text)
-    for match in matches:
-      law_name = match.group(1)
-      article = match.group(2)
-      references.append({"law_name": law_name, "article": article})
-  
-  # 중복 제거
-  seen = set()
-  unique_refs = []
-  for ref in references:
-    key = (ref["law_name"], ref["article"])
-    if key not in seen:
-      seen.add(key)
-      unique_refs.append(ref)
-  
-  return unique_refs
-
-
-def add_legal_references_to_answer(answer: str) -> str:
-  """
-  답변에 법령 참조를 추가합니다.
-  """
-  # 답변에서 법령 참조 추출
-  legal_refs = extract_legal_references_from_text(answer)
-  
-  if not legal_refs:
-    return answer
-  
-  # 각 법령 참조에 대해 tool로 조회
-  legal_footnotes = []
-  for ref in legal_refs:
-    try:
-      legal_text = search_legal_reference(
-        law_name=ref.get("law_name"),
-        article=ref.get("article")
-      )
-      if legal_text and "검색된 법령 조항이 없습니다" not in legal_text:
-        # 각주 형식으로 추가
-        legal_footnotes.append(f"\n\n[각주: {ref['law_name']} {ref['article']}]\n{legal_text}")
-    except Exception as e:
-      logger.warning(f"법령 조회 실패 ({ref}): {e}")
-  
-  # 법령 참조를 답변에 추가
-  if legal_footnotes:
-    answer += "\n\n---\n**관련 법령 조항:**" + "".join(legal_footnotes)
-  
-  return answer
+    pinecone_db = PineconeVectorStore(index_name=index_name, embedding=embedding)
+    retriever = pinecone_db.as_retriever(search_kwargs={"k": 4})
+    return retriever
 
 
 def get_fewshot_examples_text():
-  """
-  Few-shot 예시를 텍스트 형태로 반환합니다.
-  """
-  examples = [
-    {
-      "question": "단체보험의 구성은?",
-      "answer": """단체보험은 기본항목(필수)과 기본항목(선택) 그리고 자율항목으로 구성됩니다.
+    """
+    Few-shot 예시를 텍스트 형태로 반환합니다.
+    """
+    examples = [
+        {
+            "question": "단체보험의 구성은?",
+            "answer": """단체보험은 기본항목(필수)과 기본항목(선택) 그리고 자율항목으로 구성됩니다.
 
 |**구분**|**내용**|**구성**|
 |---|---|---|
@@ -580,122 +300,118 @@ def get_fewshot_examples_text():
 |**기본항목 (선택)**|운영기관의 장이 정책적 필요에 따라 설정하고 구성원이 의무적으로 선택하여야 하는 항목|**본인 및 가족의료비 보장보험**, 건강검진 등|
 |**자율항목**|운영기관의 장이 필요에 따라 설정하고 개별 구성원이 자유롭게 선택할 수 있는 항목|건강관리, 자기계발, 여가활용, 가정친화|
 
-*출처: 2026년도 맞춤형 복지 기관담당자 업무 매뉴얼 > 제4장 맞춤형복지 단체보험 운영 > 2. 단체보험 업무 처리기준 113p*"""
-    },
-    {
-      "question": "건강검진 복지점수 지원내용은?",
-      "answer": "건강검진 복지점수는 격년으로 350점이 배정되며, 본인 및 가족의 건강검진 용도로 사용 가능합니다. 암검진을 포함한 개인이 희망하는 모든 종합건강검진 항목에 대해 모든 병원 및 기관에서 사용할 수 있습니다. 단, 단순 외래진료 및 치료는 지원 대상이 아니지만, 위·대장내시경 수면비나 용종 제거 등 건강검진과 동반된 비용은 청구 가능합니다."
-    }
-  ]
-  
-  # 예시를 텍스트로 포맷팅
-  examples_text = "\n\n".join([
-    f"질문: {ex['question']}\n답변: {ex['answer']}"
-    for ex in examples
-  ])
-  
-  return examples_text
+*출처: 2026년도 맞춤형 복지 기관담당자 업무 매뉴얼 > 제4장 맞춤형복지 단체보험 운영 > 2. 단체보험 업무 처리기준 113p*""",
+        },
+        {
+            "question": "건강검진 복지점수 지원내용은?",
+            "answer": "건강검진 복지점수는 격년으로 350점이 배정되며, 본인 및 가족의 건강검진 용도로 사용 가능합니다. 암검진을 포함한 개인이 희망하는 모든 종합건강검진 항목에 대해 모든 병원 및 기관에서 사용할 수 있습니다. 단, 단순 외래진료 및 치료는 지원 대상이 아니지만, 위·대장내시경 수면비나 용종 제거 등 건강검진과 동반된 비용은 청구 가능합니다.",
+        },
+    ]
+
+    # 예시를 텍스트로 포맷팅
+    examples_text = "\n\n".join(
+        [f"질문: {ex['question']}\n답변: {ex['answer']}" for ex in examples]
+    )
+
+    return examples_text
 
 
 def get_dictionary_chain():
-  """사전 기반 질문 변경 체인 (맞복 -> 맞춤형복지). 단순 문자열 치환으로 최적화."""
+    """사전 기반 질문 변경 체인 (맞복 -> 맞춤형복지). 단순 문자열 치환으로 최적화."""
 
-  logger.debug('get_dictionary_chain started')
+    logger.debug("get_dictionary_chain started")
 
-  # LLM 호출 없이 단순 문자열 치환으로 변경하여 성능 향상
-  def normalize_question(input_data) -> str:
-    """질문 정규화: 맞복 -> 맞춤형복지"""
-    # 딕셔너리인 경우 "question" 키에서 추출, 문자열인 경우 그대로 사용
-    if isinstance(input_data, dict):
-      question = input_data.get("question", "")
-    else:
-      question = str(input_data)
-    
-    normalized = question.replace("맞복", "맞춤형복지")
-    return normalized
+    # LLM 호출 없이 단순 문자열 치환으로 변경하여 성능 향상
+    def normalize_question(input_data) -> str:
+        """질문 정규화: 맞복 -> 맞춤형복지"""
+        # 딕셔너리인 경우 "question" 키에서 추출, 문자열인 경우 그대로 사용
+        if isinstance(input_data, dict):
+            question = input_data.get("question", "")
+        else:
+            question = str(input_data)
 
-  dictionary_chain = RunnableLambda(normalize_question)
+        normalized = question.replace("맞복", "맞춤형복지")
+        return normalized
 
-  logger.debug('get_dictionary_chain ended')
+    dictionary_chain = RunnableLambda(normalize_question)
 
-  return dictionary_chain
+    logger.debug("get_dictionary_chain ended")
+
+    return dictionary_chain
 
 
 def get_qa_chain():
 
-  logger.debug('get_qa_chain started')
+    logger.debug("get_qa_chain started")
 
-  #llm = get_llm()
-  retriever = get_retriever_pinecone()
-  prompt = hub.pull("rlm/rag-prompt")
+    # llm = get_llm()
+    retriever = get_retriever_pinecone()
+    prompt = hub.pull("rlm/rag-prompt")
 
-  #print('llm', llm)
-  #print('retriever', retriever)
-  #print('prompt', prompt)
+    # print('llm', llm)
+    # print('retriever', retriever)
+    # print('prompt', prompt)
 
-  qa_chain = (
-    RunnableParallel(
-      context=retriever,
-      question=RunnablePassthrough(),
+    qa_chain = (
+        RunnableParallel(
+            context=retriever,
+            question=RunnablePassthrough(),
+        )
+        | prompt
+        | llm
+        # | StrOutputParser()
     )
-    | prompt
-    | llm
-    #| StrOutputParser()
-  )
 
-  logger.debug('get_qa_chain ended')
+    logger.debug("get_qa_chain ended")
 
-  return qa_chain
-
-
+    return qa_chain
 
 
 def get_rag_chain():
-  """
-  대화 이력 기반 RAG 체인 (History-Aware RAG)을 구성하고 반환합니다.
-  
-  History-Aware Question -> Retrieval -> Context + History + Question -> Answer
-  
-  성능 최적화: 대화 이력이 없거나 짧을 때는 History-Aware Question Transformation을 스킵합니다.
-  """
+    """
+    대화 이력 기반 RAG 체인 (History-Aware RAG)을 구성하고 반환합니다.
 
-  logger.debug('get_rag_chain started')
+    History-Aware Question -> Retrieval -> Context + History + Question -> Answer
 
-  # 기본 retriever (History-Aware 없이 사용)
-  base_retriever = get_retriever_pinecone()
-  
-  # 1. History-Aware Question Transformation (성능 최적화)
-  # 프롬프트 간소화 및 빠른 응답을 위한 최적화
-  contextualize_q_system_prompt = (
-    "대화 이력이 있으면 최신 질문을 독립적인 검색 쿼리로 변환하세요. "
-    "대화 이력이 없으면 현재 질문을 그대로 반환하세요. "
-    "검색 쿼리만 출력하세요."
-  )
-  contextualize_q_prompt = ChatPromptTemplate.from_messages(
-    [
-      ("system", contextualize_q_system_prompt),
-      ("placeholder", "{chat_history}"), # RunnableWithMessageHistory에 의해 채워짐
-      ("user", "{question}"),
-    ]
-  )
-  
-  
-  
-  # 질문 변환 체인: chat_history와 question을 받아 검색 쿼리(새로운 질문)를 생성
-  # 성능 최적화: 간소화된 프롬프트와 제한된 토큰으로 빠른 응답
-  history_aware_retriever = (
-    contextualize_q_prompt 
-    | llm
-    | StrOutputParser() 
-    | base_retriever
-  )
+    성능 최적화: 대화 이력이 없거나 짧을 때는 History-Aware Question Transformation을 스킵합니다.
+    """
 
-  # 2. Answer Generation Prompt (RAG Prompt with Few-shot examples)
-  # Few-shot 예시를 포함한 커스텀 RAG 프롬프트 생성
-  #fewshot_examples_text = get_fewshot_examples_text()
-  
-  # RAG 프롬프트에 few-shot 예시와 context를 결합
-  rag_prompt_template = f"""You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. 
+    logger.debug("get_rag_chain started")
+
+    # 기본 retriever (History-Aware 없이 사용)
+    base_retriever = get_retriever_pinecone()
+
+    # 1. History-Aware Question Transformation (성능 최적화)
+    # 프롬프트 간소화 및 빠른 응답을 위한 최적화
+    contextualize_q_system_prompt = (
+        "대화 이력이 있으면 최신 질문을 독립적인 검색 쿼리로 변환하세요. "
+        "대화 이력이 없으면 현재 질문을 그대로 반환하세요. "
+        "대화 이력과 질문이 연관성이 없으면 현재 질문을 그대로 반환하세요."
+        "검색 쿼리만 출력하세요."
+    )
+    contextualize_q_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", contextualize_q_system_prompt),
+            (
+                "placeholder",
+                "{chat_history}",
+            ),  # RunnableWithMessageHistory에 의해 채워짐
+            ("user", "{question}"),
+        ]
+    )
+
+    # 질문 변환 체인: chat_history와 question을 받아 검색 쿼리(새로운 질문)를 생성
+    # 성능 최적화: 간소화된 프롬프트와 제한된 토큰으로 빠른 응답
+    history_aware_retriever = (
+        contextualize_q_prompt | llm | StrOutputParser() | base_retriever
+    )
+
+    # 2. Answer Generation Prompt (RAG Prompt with Few-shot examples)
+    # Few-shot 예시를 포함한 커스텀 RAG 프롬프트 생성
+    # fewshot_examples_text = get_fewshot_examples_text()
+
+    # RAG 프롬프트에 few-shot 예시와 context를 결합
+    rag_prompt_template = f"""You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. 
 
 욕을하거나 모욕하는 경우에 대답을 거부하고 정중히 질문해 달라고 요청하세요
 이제 다음 컨텍스트를 사용하여 질문에 답변하세요. 위의 예시 형식을 참고하여 답변하되, 컨텍스트에 있는 정보를 정확히 사용하세요.
@@ -717,34 +433,34 @@ Context: {{context}}
 Question: {{question}}
 
 Answer:"""
-  
-  rag_prompt = ChatPromptTemplate.from_template(rag_prompt_template)
 
-  # 3. Final Answer Generation Chain
-  rag_chain = (
-    RunnableParallel(
-      # 'context'는 History-Aware Retriever의 검색 결과를 받습니다.
-      context=history_aware_retriever, 
-      # 'question'은 원본 사용자 질문을 그대로 전달합니다.
-      question=RunnablePassthrough(), 
+    rag_prompt = ChatPromptTemplate.from_template(rag_prompt_template)
+
+    # 3. Final Answer Generation Chain
+    rag_chain = (
+        RunnableParallel(
+            # 'context'는 History-Aware Retriever의 검색 결과를 받습니다.
+            context=history_aware_retriever,
+            # 'question'은 원본 사용자 질문을 그대로 전달합니다.
+            question=RunnablePassthrough(),
+        )
+        | rag_prompt
+        | llm
+        # | StrOutputParser()
     )
-    | rag_prompt
-    | llm
-    #| StrOutputParser()
-  )
 
-  # 4. History Management Wrapper (for multi-turn)
-  # RAG 체인 전체를 RunnableWithMessageHistory로 래핑하여 대화 이력을 관리합니다.
-  final_rag_chain = RunnableWithMessageHistory(
-    rag_chain,
-    get_session_history,
-    input_messages_key="question",
-    history_messages_key="chat_history",
-  )
+    # 4. History Management Wrapper (for multi-turn)
+    # RAG 체인 전체를 RunnableWithMessageHistory로 래핑하여 대화 이력을 관리합니다.
+    final_rag_chain = RunnableWithMessageHistory(
+        rag_chain,
+        get_session_history,
+        input_messages_key="question",
+        history_messages_key="chat_history",
+    )
 
-  logger.debug(f'RAG chain (History-Aware) configuration complete.')
+    logger.debug(f"RAG chain (History-Aware) configuration complete.")
 
-  return final_rag_chain
+    return final_rag_chain
 
 
 llm = None
@@ -753,74 +469,78 @@ embedding = None
 store: dict[str, InMemoryChatMessageHistory] = {}
 
 
-def get_ai_message(user_message:str, 
-                   llm_model:LLMModel, 
-                   embedding_model:EmbeddingModel=EmbeddingModel.QWEN3_4B, 
-                   session_id:str=str(uuid.uuid4())):
-  """
-  사용자의 메시지를 받아 전체 RAG 체인을 실행하고 스트리밍 답변을 반환합니다.
+def get_ai_message(
+    user_message: str,
+    llm_model: LLMModel,
+    embedding_model: EmbeddingModel = EmbeddingModel.QWEN3_4B,
+    session_id: str = str(uuid.uuid4()),
+    _index_name: str = "gwp-gemini3",
+):
+    """
+    사용자의 메시지를 받아 전체 RAG 체인을 실행하고 스트리밍 답변을 반환합니다.
 
-  Args:
-    user_message: 사용자의 질문.
-    session_id: 대화 이력을 위한 고유 세션 ID (멀티턴 대화 시 필수).
-    llm_model: 사용할 LLM 모델.
-    embedding_model: 사용할 임베딩 모델.
-  
-  Returns:
-    tuple: (stream_generator, metadata_dict)
-      - stream_generator: 스트리밍 응답 generator
-      - metadata_dict: {"context": [...], "full_answer": "...", "tokens": {...}} 형태의 메타데이터
-  """
-  
-  global llm
-  global embedding
+    Args:
+      user_message: 사용자의 질문.
+      session_id: 대화 이력을 위한 고유 세션 ID (멀티턴 대화 시 필수).
+      llm_model: 사용할 LLM 모델.
+      embedding_model: 사용할 임베딩 모델.
+      index_name: 사용할 pinecone index 이름.
 
-  # 모델 초기화
-  embedding = get_embedding_model(embedding_model)
-  llm = get_llm(llm_model)
-  
-  # 체인 구성
-  dictionary_chain = get_dictionary_chain()
-  history_aware_rag_chain = get_rag_chain()
+    Returns:
+      tuple: (stream_generator, metadata_dict)
+        - stream_generator: 스트리밍 응답 generator
+        - metadata_dict: {"context": [...], "full_answer": "...", "tokens": {...}} 형태의 메타데이터
+    """
 
-  # dictionary_chain의 문자열 출력을 {"question": output_string} 딕셔너리로 변환합니다.
-  question_formatter = RunnableLambda(lambda x: {"question": x})
+    global llm
+    global embedding
+    global index_name
 
-  # 최종 실행 체인: 질문 정규화 -> RAG (대화 이력 포함)
-  rag_chain = dictionary_chain | question_formatter | history_aware_rag_chain
+    # 모델 초기화
+    embedding = get_embedding_model(embedding_model)
+    llm = get_llm(llm_model)
+    index_name = _index_name
 
-  # 세션 ID를 설정에 추가
-  config = {"configurable": {"session_id": session_id}}
-  
-  # CallbackHandler 정의: 검색된 문서 캡처
-  from langchain_core.callbacks import BaseCallbackHandler
+    # 체인 구성
+    dictionary_chain = get_dictionary_chain()
+    history_aware_rag_chain = get_rag_chain()
 
-  class RetrievalCallbackHandler(BaseCallbackHandler):
-      def __init__(self, metadata):
-          self.metadata = metadata
+    # dictionary_chain의 문자열 출력을 {"question": output_string} 딕셔너리로 변환합니다.
+    question_formatter = RunnableLambda(lambda x: {"question": x})
 
-      def on_retriever_end(self, documents, **kwargs):
-          # 검색된 문서들을 metadata에 저장
-          self.metadata["context"] = documents
-          logger.debug(f"Retrieved {len(documents)} documents via callback")
+    # 최종 실행 체인: 질문 정규화 -> RAG (대화 이력 포함)
+    rag_chain = dictionary_chain | question_formatter | history_aware_rag_chain
 
-  # 스트리밍 제너레이터와 빈 metadata 반환 (실제 metadata는 스트리밍 완료 후 수집)
-  metadata = {
-    "context": [],
-    "full_answer": "",
-    "tokens": {}
-  }
-  
-  # CallbackHandler 인스턴스 생성
-  callback_handler = RetrievalCallbackHandler(metadata)
-  
-  # config에 callback 추가
-  config["callbacks"] = [callback_handler]
+    # 세션 ID를 설정에 추가
+    config = {"configurable": {"session_id": session_id}}
 
-  # RAG 체인 실행 (stream 사용)
-  logger.debug(f"Streaming RAG chain with session_id: {session_id} and question: {user_message}")
-  
-  # stream으로 실행하여 스트리밍 응답 반환
-  stream_generator = rag_chain.stream({"question": user_message}, config=config)
+    # CallbackHandler 정의: 검색된 문서 캡처
+    from langchain_core.callbacks import BaseCallbackHandler
 
-  return stream_generator, metadata
+    class RetrievalCallbackHandler(BaseCallbackHandler):
+        def __init__(self, metadata):
+            self.metadata = metadata
+
+        def on_retriever_end(self, documents, **kwargs):
+            # 검색된 문서들을 metadata에 저장
+            self.metadata["context"] = documents
+            logger.debug(f"Retrieved {len(documents)} documents via callback")
+
+    # 스트리밍 제너레이터와 빈 metadata 반환 (실제 metadata는 스트리밍 완료 후 수집)
+    metadata = {"context": [], "full_answer": "", "tokens": {}}
+
+    # CallbackHandler 인스턴스 생성
+    callback_handler = RetrievalCallbackHandler(metadata)
+
+    # config에 callback 추가
+    config["callbacks"] = [callback_handler]
+
+    # RAG 체인 실행 (stream 사용)
+    logger.debug(
+        f"Streaming RAG chain with session_id: {session_id} and question: {user_message}"
+    )
+
+    # stream으로 실행하여 스트리밍 응답 반환
+    stream_generator = rag_chain.stream({"question": user_message}, config=config)
+
+    return stream_generator, metadata
