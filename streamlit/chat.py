@@ -219,7 +219,9 @@ from llm import save_report_to_supabase
 # ... inside the loop ...
 for i, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
-        st.write(message["content"])
+        print(f'message: {message["content"]}')
+
+        st.markdown(message["content"])
 
         # 답변 생성 시간 표시
         if "latency_msg" in message:
@@ -318,6 +320,8 @@ if user_question := st.chat_input(
                     full_answer += chunk_text
                     # 스트리밍 중 답변 표시 (커서 포함)
                     answer_container.markdown(full_answer + "▌", unsafe_allow_html=True)
+
+            print(f"full_answer: {full_answer}")
 
             # 스트리밍 완료 후 최종 답변 표시 (커서 제거)
             answer_container.markdown(full_answer, unsafe_allow_html=True)
@@ -429,70 +433,6 @@ if user_question := st.chat_input(
             # 답변 생성 시간 계산
             end_time = time.time()
             latency = end_time - start_time
-
-            # <br> 태그 처리: 테이블 내에서는 HTML <br>로 유지, 테이블 외부에서는 줄바꿈으로 변환
-            # 스트리밍 완료 후 처리
-            def process_br_tags(text):
-                # 테이블 패턴 찾기 (|로 시작하거나 끝나는 줄)
-                lines = text.split("\n")
-                result_lines = []
-                in_table = False
-
-                for line in lines:
-                    stripped = line.strip()
-                    # 테이블 시작/종료 감지
-                    if "|" in line and (
-                        stripped.startswith("|") or stripped.endswith("|")
-                    ):
-                        in_table = True
-                        # 테이블 내에서는 <br>을 HTML로 유지 (unsafe_allow_html로 렌더링)
-                        # 이미 <br> 태그가 있으면 그대로 유지
-                        line = re.sub(r"<br\s*/?>", "<br>", line, flags=re.IGNORECASE)
-                    elif in_table and stripped and "|" not in line:
-                        # 테이블 종료 (빈 줄이 아니고 |가 없는 줄)
-                        in_table = False
-                    elif not in_table:
-                        # 테이블 외부에서는 <br>을 줄바꿈으로 변환
-                        line = re.sub(r"<br\s*/?>", "\n", line, flags=re.IGNORECASE)
-
-                    result_lines.append(line)
-
-                # 테이블 내부의 줄바꿈을 <br>로 변환 (테이블 셀 내부 줄바꿈 처리)
-                # 전체 텍스트를 다시 분석하여 테이블 셀 내부의 줄바꿈을 <br>로 변환
-                result_text = "\n".join(result_lines)
-
-                # 테이블 행 패턴: |로 시작하고 끝나는 줄
-                table_row_pattern = re.compile(
-                    r"^(\s*\|[^|\n]*\|[^|\n]*\|\s*)$", re.MULTILINE
-                )
-
-                def replace_newlines_in_table_cells(match):
-                    row = match.group(1)
-                    # 셀 구분자 | 사이의 내용에서 줄바꿈을 <br>로 변환
-                    # 단, 이미 <br> 태그가 있으면 그대로 유지
-                    cells = row.split("|")
-                    processed_cells = []
-                    for i, cell in enumerate(cells):
-                        if i == 0 or i == len(cells) - 1:
-                            # 첫 번째와 마지막은 빈 문자열이거나 공백만 있음
-                            processed_cells.append(cell)
-                        else:
-                            # 셀 내부의 줄바꿈을 <br>로 변환 (단, 이미 <br>이 있으면 유지)
-                            if "\n" in cell and "<br" not in cell.lower():
-                                cell = cell.replace("\n", "<br>")
-                            processed_cells.append(cell)
-                    return "|".join(processed_cells)
-
-                # 테이블 행 내부의 줄바꿈을 <br>로 변환
-                result_text = table_row_pattern.sub(
-                    replace_newlines_in_table_cells, result_text
-                )
-
-                return result_text
-
-            # <br> 태그 처리
-            processed_answer = process_br_tags(full_answer)
-            full_answer = processed_answer
 
             # 처리된 답변으로 업데이트
             answer_container.markdown(full_answer, unsafe_allow_html=True)
