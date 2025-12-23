@@ -219,13 +219,12 @@ from llm import save_report_to_supabase
 # ... inside the loop ...
 for i, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
-        print(f'message: {message["content"]}')
 
-        st.markdown(message["content"])
+        st.markdown(message["content"], unsafe_allow_html=True)
 
         # 답변 생성 시간 표시
         if "latency_msg" in message:
-            st.caption(message["latency_msg"])
+            st.caption(message["latency_msg"], unsafe_allow_html=True)
 
         # 챗봇 답변인 경우 신고 기능 추가
         if message["role"] == "assistant":
@@ -320,8 +319,6 @@ if user_question := st.chat_input(
                     full_answer += chunk_text
                     # 스트리밍 중 답변 표시 (커서 포함)
                     answer_container.markdown(full_answer + "▌", unsafe_allow_html=True)
-
-            print(f"full_answer: {full_answer}")
 
             # 스트리밍 완료 후 최종 답변 표시 (커서 제거)
             answer_container.markdown(full_answer, unsafe_allow_html=True)
@@ -437,17 +434,23 @@ if user_question := st.chat_input(
             # 처리된 답변으로 업데이트
             answer_container.markdown(full_answer, unsafe_allow_html=True)
 
-            # 법령 참조 추가 (답변에 법령명이나 조항이 있는 경우)
-            full_answer_with_legal_refs = add_legal_references_to_answer(full_answer)
+            # # 법령 참조 추가 (답변에 법령명이나 조항이 있는 경우)
+            # full_answer_with_legal_refs = add_legal_references_to_answer(full_answer)
 
-            # 법령 참조가 추가된 경우 답변 업데이트
-            if full_answer_with_legal_refs != full_answer:
-                st.markdown("---")
-                st.markdown("**관련 법령 조항이 추가되었습니다.**")
-                # 법령 참조 부분만 표시
-                legal_refs_section = full_answer_with_legal_refs[len(full_answer) :]
-                st.markdown(legal_refs_section)
-                full_answer = full_answer_with_legal_refs
+            # print(f"full_answer_with_legal_refs: {full_answer_with_legal_refs}")
+
+            # # 법령 참조가 추가된 경우 답변 업데이트
+            # if full_answer_with_legal_refs != full_answer:
+            #     st.markdown("---")
+            #     # st.markdown("**관련 법령 조항이 추가되었습니다.**")
+            #     # 법령 참조 부분만 표시
+            #     legal_refs_section = full_answer_with_legal_refs[len(full_answer) :]
+            #     st.markdown(legal_refs_section)
+            #     full_answer = full_answer_with_legal_refs
+
+            # 답변 생성 시간 저장
+            latency_msg = f"답변 생성 시간: {latency:.2f} 초 ({len(full_answer) / latency:.2f} 자/초) @{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            st.caption(latency_msg)
 
             # 로그 저장 및 ID 저장
             chat_log_id = None
@@ -469,8 +472,6 @@ if user_question := st.chat_input(
             if chat_log_id:
                 message_data["chat_id"] = chat_log_id
 
-            # 답변 생성 시간 저장
-            latency_msg = f"답변 생성 시간: {latency:.2f} 초 ({len(full_answer) / latency:.2f} 자/초) @{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             message_data["latency_msg"] = latency_msg
 
             st.session_state.messages.append(message_data)

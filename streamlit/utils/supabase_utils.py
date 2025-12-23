@@ -56,6 +56,11 @@ def save_log_to_supabase(
     if not supabase:
         return
 
+    # 로컬 환경에서는 Supabase 저장 건너뛰기
+    if os.environ.get("IS_LOCAL", "false").lower() == "true":
+        logger.info("로컬 환경이므로 대화 로그 저장을 건너뜁니다.")
+        return
+
     try:
         # 소스 문서 정보 직렬화 (JSON 형태로 저장)
         serialized_docs = []
@@ -109,6 +114,11 @@ def save_report_to_supabase(chat_id, reason, details):
     supabase = get_supabase_client()
     if not supabase:
         logger.error("Supabase 클라이언트가 초기화되지 않아 신고를 저장할 수 없습니다.")
+        return
+
+    # 로컬 환경에서는 Supabase 저장 건너뛰기
+    if os.environ.get("IS_LOCAL", "false").lower() == "true":
+        logger.info("로컬 환경이므로 신고 저장을 건너뜁니다.")
         return
 
     try:
