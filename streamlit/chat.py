@@ -90,6 +90,13 @@ else:
 
 st.set_page_config(page_title="맞춤형복지 챗봇", page_icon=":robot_face:")
 
+# Toast 메시지 처리 (rerun 후에도 표시)
+if "toast_msg" in st.session_state:
+  st.toast(st.session_state["toast_msg"], icon="✅")
+  del st.session_state["toast_msg"]
+
+
+
 # 인증 상태 확인
 if 'authenticated' not in st.session_state:
   st.session_state.authenticated = False
@@ -181,9 +188,55 @@ st.caption(f"맞춤형 복지 챗봇입니다. 궁금하신 점이 있으시면 
 if 'messages' not in st.session_state:
   st.session_state.messages = []
 
-for message in st.session_state.messages:
+from llm import save_report_to_supabase
+
+# ... imports ...
+# (Existing imports are fine, just ensuring save_report_to_supabase is imported)
+
+# ... inside the loop ...
+for i, message in enumerate(st.session_state.messages):
   with st.chat_message(message["role"]):
     st.write(message["content"])
+    
+    # 답변 생성 시간 표시
+    if "latency_msg" in message:
+      st.caption(message["latency_msg"])
+    
+    # 챗봇 답변인 경우 신고 기능 추가
+    if message["role"] == "assistant":
+      chat_id = message.get("chat_id")
+      if chat_id:
+        # 신고 폼 버전 관리 (Expander를 닫고 폼을 초기화하기 위함)
+        report_version_key = f"report_version_{i}"
+        if report_version_key not in st.session_state:
+          st.session_state[report_version_key] = 0
+        
+        report_version = st.session_state[report_version_key]
+        
+        # Expander 라벨에 보이지 않는 공백 문자를 추가하여 버전을 구분 (새로운 Expander로 인식되어 닫힘)
+        expander_label = "🚨 답변 신고하기" + ("\u200b" * report_version)
+        
+        with st.expander(expander_label):
+          # Form 키도 변경하여 입력값 초기화
+          with st.form(key=f"report_form_{i}_{report_version}"):
+            reason = st.radio(
+              "신고 사유를 선택해주세요", 
+              ["정보가 부정확함", "유해하거나 부적절한 내용", "관련없는 답변", "기타"],
+              key=f"reason_{i}_{report_version}"
+            )
+            details = st.text_area("상세 내용을 입력해주세요 (선택사항)", key=f"details_{i}_{report_version}")
+            
+            submit_clicked = st.form_submit_button("신고 제출")
+            if submit_clicked:
+              save_report_to_supabase(
+                chat_id=chat_id,
+                reason=reason,
+                details=details
+              )
+              # Toast 메시지 예약 및 버전 증가 (Expander 닫힘/폼 초기화 효과)
+              st.session_state["toast_msg"] = "신고가 접수되었습니다. 소중한 의견 감사합니다."
+              st.session_state[report_version_key] += 1
+              st.rerun()
 
 if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 궁금한 점을 입력해주세요."):
   # 답변 생성 시간 측정 시작
@@ -395,13 +448,10 @@ if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 
         st.markdown(legal_refs_section)
         full_answer = full_answer_with_legal_refs
       
-      st.session_state.messages.append({"role": "assistant", "content": full_answer})
-
-      st.caption(f"답변 생성 시간: {latency:.2f} 초 ({len(full_answer) / latency:.2f} 자/초) @{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-      # 로그 저장 (스트리밍 완료 후)
+      # 로그 저장 및 ID 저장
+      chat_log_id = None
       try:
-        save_log_to_supabase(
+        chat_log_id = save_log_to_supabase(
           session_id=session_id,
           question=user_question,
           answer=full_answer,
@@ -412,3 +462,17 @@ if user_question := st.chat_input(placeholder="맞춤형복지 제도에 대해 
         )
       except Exception as e:
         logger.error(f"로그 저장 실패: {e}")
+
+      # 메시지 저장 (chat_id 포함)
+      message_data = {"role": "assistant", "content": full_answer}
+      if chat_log_id:
+        message_data["chat_id"] = chat_log_id
+      
+      # 답변 생성 시간 저장
+      latency_msg = f"답변 생성 시간: {latency:.2f} 초 ({len(full_answer) / latency:.2f} 자/초) @{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+      message_data["latency_msg"] = latency_msg
+        
+      st.session_state.messages.append(message_data)
+      
+      # UI 갱신을 위해 리런 (신고 버튼이 즉시 활성화되도록 함)
+      st.rerun()
