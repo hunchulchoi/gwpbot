@@ -220,6 +220,8 @@ from llm import save_report_to_supabase
 for i, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
 
+        print(message)
+
         st.markdown(message["content"], unsafe_allow_html=True)
 
         # 답변 생성 시간 표시
